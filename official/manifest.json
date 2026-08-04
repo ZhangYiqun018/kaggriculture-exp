@@ -1,0 +1,20 @@
+{
+  "repository": "Kaggle/kaggle-environments",
+  "official_commit": "dfa0b9630c71203d511622b13574087f37bde8d6",
+  "official_commit_subject": "Fix flaky Quoridor test (#1384)",
+  "official_commit_note": "Commit exists on github.com but does NOT touch kaggriculture. Spec narrative claiming this commit fixes locked-tile movement in Kaggriculture is NOT supported by the commit diff. All behavioral claims must be verified against the installed 1.32.3 package and its tests, per truth-priority rules.",
+  "default_branch_observed": "master",
+  "target_package_version": "1.32.3",
+  "environment": "kaggriculture",
+  "env_path_in_repo": "kaggle_environments/envs/kaggriculture",
+  "env_confirmed_via_github_api": true,
+  "checked_date": "2026-08-04",
+  "truth_priority": [
+    "1. Installed kaggle-environments==1.32.3 actual runtime behavior",
+    "2. Official kaggle_environments/envs/kaggriculture/kaggriculture.py (from installed package)",
+    "3. Official tests/envs/kaggriculture/test_kaggriculture.py (from installed package or repo)",
+    "4. Official kaggle_environments/envs/kaggriculture/kaggriculture.json (default config)",
+    "5. Official README / AGENTS.md (lowest priority; known to contradict source)",
+    "6. Third-party public repos, notebooks, replays (advisory only)"
+  ]
+}

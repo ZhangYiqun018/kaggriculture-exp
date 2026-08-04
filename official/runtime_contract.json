@@ -1,0 +1,156 @@
+{
+  "source": "installed kaggle-environments==1.32.3, kaggle_environments/envs/kaggriculture/kaggriculture.py (1055 lines), verified 2026-08-04",
+  "default_configuration": {
+    "agents": 2,
+    "episodeSteps": 720,
+    "actTimeout": 1,
+    "boardSize": 10,
+    "startingMoney": 3000,
+    "maxMarketOrdersPerTurn": 10,
+    "turnsPerDay": 24,
+    "shedCapacity": 100,
+    "weedSpawnChance": 0.005,
+    "townShopUnlockInterval": 3,
+    "townShopSellInterval": 4,
+    "townCenterSellInterval": 12,
+    "farmHandCostMult": 1,
+    "marketParams": {}
+  },
+  "season": {
+    "total_steps": 720,
+    "turns_per_day": 24,
+    "days": 30,
+    "last_processed_step": 718,
+    "done_set_at_step": 719,
+    "done_condition": "step >= episodeSteps - 2 (i.e. step >= 718 for episodeSteps=720)"
+  },
+  "turn_processing_order": [
+    "1. Unit actions (farmer first, then hands in order) — interpreter L882-908",
+    "2. Market orders — _process_market, L910",
+    "3. Town consumption — _town_consume, L911",
+    "4. Crop decay — _decay_plants, L912-913",
+    "5. End-of-day refresh (if (step+1) % turns_per_day == 0) — _end_of_day, L914-915"
+  ],
+  "crops": {
+    "WHEAT":      {"seed_cost": 10,  "first_yield_day": 2,  "max_yield_day": 4,  "interval": 0, "max_yield": 6, "ongoing": false},
+    "CARROT":     {"seed_cost": 20,  "first_yield_day": 2,  "max_yield_day": 3,  "interval": 0, "max_yield": 4, "ongoing": false},
+    "TOMATO":     {"seed_cost": 50,  "first_yield_day": 8,  "max_yield_day": 8,  "interval": 1, "max_yield": 4, "ongoing": true},
+    "STRAWBERRY": {"seed_cost": 100, "first_yield_day": 10, "max_yield_day": 10, "interval": 2, "max_yield": 4, "ongoing": true},
+    "MELON":      {"seed_cost": 80,  "first_yield_day": 10, "max_yield_day": 12, "interval": 0, "max_yield": 6, "ongoing": false}
+  },
+  "animals": {
+    "GOOSE": {"cost": 300, "structure": "COOP",    "first_yield_day": 4, "interval": 1, "max_held": 4, "product": "EGG"},
+    "COW":   {"cost": 400, "structure": "PASTURE", "first_yield_day": 8, "interval": 2, "max_held": 6, "product": "MILK"},
+    "SHEEP": {"cost": 500, "structure": "PASTURE", "first_yield_day": 6, "interval": 3, "max_held": 6, "product": "WOOL"}
+  },
+  "products": ["WHEAT", "CARROT", "TOMATO", "STRAWBERRY", "MELON", "EGG", "MILK", "WOOL", "FERTILIZER"],
+  "town_center_products": ["WHEAT", "CARROT", "TOMATO", "STRAWBERRY", "MELON", "EGG", "MILK", "WOOL"],
+  "market": {
+    "I0": 10000,
+    "price_floor": 1,
+    "price_function": "price = base + sign * amp * f(|inv - I0|); sign=+1 below I0 (scarcity up), -1 above I0 (glut down); amp = target * base / f(T); floored at 1",
+    "note_on_sell_supply": "Sales at price==1 do NOT increase market inventory (L634). Sales at price>1 increase inventory by 1 per unit committed.",
+    "lockstep": "Both players' order[i] quoted against same pre-commit inventory, then both commit one unit, then re-quote. _refresh_prices called once after all orders (L603).",
+    "max_orders_per_turn": 10,
+    "order_truncation": "Each player's market queue truncated to max_orders at L535; extras silently dropped."
+  },
+  "movement": {
+    "directions": {"NORTH": [0,-1], "SOUTH": [0,1], "EAST": [1,0], "WEST": [-1,0]},
+    "locked_traversal": true,
+    "locked_traversal_note": "Movement onto/through LOCKED tiles allowed (L313-316). Tile ops (PLANT/WATER/etc.) no-op on LOCKED (L323-324). Out-of-bounds rejected (L311-312).",
+    "obstacles": "No plant/building/animal/unit blocking. Manhattan routing sufficient.",
+    "co_occupancy": "Farmer and hands may share a tile."
+  },
+  "plant_lifecycle": {
+    "planting_day_unwatered_init": 1,
+    "water_bonus_window_start": "ceil(max_yield_day/2) for one-time crops (L383: window_start = (max_yield_day+1)//2)",
+    "water_bonus_one_time": "+1 per watered day in window; +2 if fertilized (L385)",
+    "plant_to_weed": "consecutive_unwatered >= 2 at end-of-day refresh -> WEED (L753-754)",
+    "decay": "After max_lifespan_step, yield_units -=1 every 2 steps until 0 -> WEED (L729-736)",
+    "ongoing_production": "At end-of-day, if days_since_first % interval == 0 and production_count <= max_yield: +2 if (watered AND fertilized) else +1 (L770)"
+  },
+  "plant_atomicity": {
+    "rule": "If total PLANT requests for a crop this turn exceed available seeds, ALL PLANT requests for that crop are converted to PASS (L889-902). First-come-first-served does NOT apply within a single turn.",
+    "implementation": "interpreter pre-scans unit_actions, builds blocked set, rewrites blocked PLANTs to PASS before _apply_unit_action."
+  },
+  "seed_and_shed": {
+    "seeds_separate": true,
+    "seeds_note": "Seeds live in private['seeds'], never in shed, never PICKUP. PLANT consumes directly (L368-370). No cap on seeds.",
+    "shed_capacity": 100,
+    "shed_overflow": "End-of-day _drop_inventories_to_shed: items beyond capacity discarded (L813-827).",
+    "auto_shed_at_eod": true
+  },
+  "hire": {
+    "cost_sequence": "fib(n) * farmHandCostMult where n = hires_today; fib: 1,1,2,3,5,8,13,21,... (L659-668)",
+    "timing": "HIRE processed in market phase (after unit actions). New hand appended to farm['hands'] (L677) but unit actions already done, so hand acts next turn at earliest.",
+    "resets_daily": true,
+    "last_hour_rule": "No explicit last-hour block in source; spec recommends not hiring on last hour (no future value). This is a policy constraint, not engine-enforced."
+  },
+  "end_of_day_refresh": [
+    "1. _daily_refresh_plants: watered->consecutive_unwatered=0 else +1; >=2 -> WEED; ongoing production ticks (L739-772)",
+    "2. _daily_refresh_animals: fed->consecutive_unfed=0 else +1; >=2 -> escape (structure remains); production + care bonus (L775-803)",
+    "3. _spawn_weeds: empty tiles get weed with weedSpawnChance (L806-810)",
+    "4. _drop_inventories_to_shed: all unit inventories -> shed, overflow lost (L813-827, called L848)",
+    "5. farmer reset to _default_spawn (L849)",
+    "6. hands cleared (L850)",
+    "7. hires_today reset to 0 (L851)",
+    "8. inventories reset to [{}] (L852)",
+    "9. town shop unlock if (next_day % townShopUnlockInterval == 0) (L856-860)"
+  ],
+  "animal_lifecycle": {
+    "escape_after_consecutive_unfed": 2,
+    "escape_behavior": "Animal removed, structure (COOP/PASTURE) remains (L787-789)",
+    "fertilizer_regeneration": "Every surviving animal: fertilizer_available=True at end-of-day (L801)",
+    "care_bonus_per_fed_cared_day": 1,
+    "care_bonus_note": "L800: pending_care_bonus += 1 if cared_today AND fed_today. Bonus consumed on next fed production day (L796). NOT +2 as some docs claim.",
+    "feed_source": "FEED consumes WHEAT from unit inventory only (L486). No auto-feed from shed.",
+    "production": "At end-of-day, if days_since_first % interval == 0: yield_units += 1 + bonus (capped at max_held) (L792-797)"
+  },
+  "sell_fertilizer": {
+    "allowed": true,
+    "source_truth": "L571: op=='SELL' and item in PRODUCTS; PRODUCTS includes FERTILIZER (L25). _commit_unit SELL branch (L628-636) has no FERTILIZER special-case.",
+    "agents_md_claim": "AGENTS.md says 'Fertilizer can only be bought, not sold.' — this is FALSE per source.",
+    "agents_md_is": "outdated/incorrect on this point"
+  },
+  "buy_land": {
+    "order": ["NE", "SW", "SE"],
+    "prices": [1000, 2000, 4000],
+    "source": "LAND_ORDER/LAND_PRICES (L82-83), _do_buy_land (L681-694)"
+  },
+  "town": {
+    "shops": {
+      "BAKERY": ["EGG", "WHEAT"],
+      "PIZZA_SHOP": ["MILK", "TOMATO", "WHEAT"],
+      "BRUNCH_SPOT": ["EGG", "WHEAT", "STRAWBERRY"],
+      "YARN_STORE": ["WOOL"],
+      "ICE_CREAM_SHOP": ["STRAWBERRY", "MILK", "WHEAT"],
+      "PET_CAFE": ["CARROT"],
+      "SMOOTHIE_SHOP": ["STRAWBERRY", "MILK"],
+      "FARMERS_MARKET": ["WHEAT", "CARROT", "TOMATO", "STRAWBERRY"]
+    },
+    "shop_demand_mult": "2x for single-product shops, 1x otherwise (L710)",
+    "center_demand_schedule": [{"day_gte": 20, "mult": 4}, {"day_gte": 10, "mult": 2}, {"day_gte": 0, "mult": 1}],
+    "center_interval": 12,
+    "shop_unlock_interval_days": 3,
+    "shop_selection": "rng.choice(sorted(remaining)) — deterministic given seed (L859)"
+  },
+  "random_agent_reproducibility": {
+    "reproducible": false,
+    "reason": "random_agent creates rng = random.Random() with no seed each call (L997). end-of-day weed/shop use seeded rng (L841), but the 'random' BUILTIN AGENT is not reproducible.",
+    "implication": "Do not use built-in 'random' as a primary regression opponent."
+  },
+  "file_loader": {
+    "rule": "kaggle_environments.agent.get_last_callable selects the LAST callable defined in the file, not by name 'agent'.",
+    "requirement": "In submission main.py, `agent` must be the last callable defined; no functions/classes/lambdas/callable aliases after it."
+  },
+  "spec_premise_verification": {
+    "locked_tile_movement_fixed": "Confirmed in 1.32.3 source (L313-316). Cannot verify this was a 'fix' vs older version without history, but current behavior matches spec claim.",
+    "sell_fertilizer_allowed": true,
+    "care_bonus_is_plus_1_not_plus_2": true,
+    "action_order_unit_then_market_then_town_then_decay_then_eod": true,
+    "market_lockstep": true,
+    "actTimeout_1s": true,
+    "max_10_market_orders": true,
+    "commit_dfa0b96_is_quoridor_not_kaggriculture": true
+  }
+}

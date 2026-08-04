@@ -1,0 +1,20 @@
+[project]
+name = "kaggriculture-exp"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "kaggle-environments==1.32.3",
+    "litellm==1.90.0",
+    "pytest",
+    "numpy",
+]
+
+[tool.uv]
+# litellm >=1.93 introduces a puccinialin build backend that downloads the
+# rust toolchain from static.rust-lang.org at install time. We pin 1.90.0
+# (pure wheel, no rust) which still satisfies kaggle-environments' constraint
+# (litellm>=1.86.1,<1.94.0).
+# gym has no wheels; allow it to build from source (pure Python, no rust).
+no-binary-package = ["gym"]
+
+[tool.uv.sources]
