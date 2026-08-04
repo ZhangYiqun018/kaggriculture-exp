@@ -21,7 +21,7 @@ SRC = ROOT / "src" / "kaggriculture_bot"
 
 # Fixed inline order: any module may only NAME dependencies on earlier ones.
 INLINE_MODULES = ["constants.py", "safety.py", "state.py", "economy.py",
-                  "tasks.py", "assignment.py"]
+                  "tasks.py", "assignment.py", "hire_manager.py"]
 
 # Per-file import lines that must be dropped when inlining (they are hoisted to
 # the top of the bundle or already provided by earlier inlined modules).
@@ -38,7 +38,9 @@ STRIP_PREFIXES = (
     "from .economy import",
     "from .tasks import",
     "from .assignment import",
+    "from .hire_manager import",
     "from kaggriculture_bot",
+    "from kaggriculture_bot.",
 )
 
 HOISTED_HEADER = '''"""Auto-generated single-file Kaggressriculture agent. Do not edit by hand."""
