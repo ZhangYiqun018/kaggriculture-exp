@@ -28,6 +28,7 @@ class TileInfo:
     watered_today: bool = False
     consecutive_unwatered: int = 0
     fertilized_until_day: int = -1
+    max_lifespan_step: int = -1  # -1 for ongoing crops until max production reached
 
     @property
     def empty(self) -> bool:
@@ -64,6 +65,7 @@ class TileInfo:
                     watered_today=bool(g(raw, "watered_today", False)),
                     consecutive_unwatered=int(g(raw, "consecutive_unwatered", 0)),
                     fertilized_until_day=int(g(raw, "fertilized_until_day", -1)),
+                    max_lifespan_step=int(g(raw, "max_lifespan_step", -1)),
                 )
             if kind == "WEED":
                 return cls(x, y, "WEED")
