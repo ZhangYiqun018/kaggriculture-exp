@@ -33,7 +33,7 @@ def _shape(func: str, x: float) -> float:
 
 
 def market_price(item: str, inventory: float, params: dict | None = None) -> int:
-    """Exact replica of engine market_price (kaggressriculture.py L177-191)."""
+    """Exact replica of engine market_price (kaggriculture.py L177-191)."""
     p = (params or MARKET_PARAMS)[item]
     base, i0, t = p["base"], p["I0"], p["T"]
     if inventory < i0:

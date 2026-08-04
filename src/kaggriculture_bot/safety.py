@@ -64,7 +64,7 @@ def _seed_budget_plant_check(farmer_action: list, hands_actions: list[list],
                              seeds: dict) -> tuple[list, list[list]]:
     """If total PLANT requests for a crop exceed seeds, convert ALL that crop's PLANTs to PASS.
 
-    Mirrors the engine's atomic PLANT validation (kaggressriculture.py L889-902).
+    Mirrors the engine's atomic PLANT validation (kaggriculture.py L889-902).
     """
     unit_actions = [farmer_action] + hands_actions
     demand: dict[str, int] = {}

@@ -2,7 +2,7 @@
 
 The strongest test here is *parity against the engine itself*: our pure
 market_price / sell_revenue replicas are compared cell-by-cell against the
-installed kaggressriculture.py functions, so the local truth cannot drift
+installed kaggriculture.py functions, so the local truth cannot drift
 from the real runtime.
 """
 from __future__ import annotations
