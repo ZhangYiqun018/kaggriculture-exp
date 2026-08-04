@@ -1,0 +1,16 @@
+{
+  "smoke": [11, 23, 37, 53],
+  "screen": [101, 103, 107, 109, 113, 127, 131, 137],
+  "confirm": [201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250],
+  "held_out": [301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320],
+  "online_holdout": [],
+  "_note": "Seed sets are FIXED and must not be re-picked based on results. smoke=4, screen=8, confirm=50, held_out=20. Seeds are disjoint primes/integers. Once a candidate is frozen, held_out may be used exactly once.",
+  "_families": {
+    "basic_baselines": ["pass", "deterministic_random", "wheat_only", "crop_diversified"],
+    "crop_closed_loop": ["starter", "melon_wheat", "conservative_cash"],
+    "replay_tape_lineage": [],
+    "learned_market_ranker": [],
+    "economic_control": ["market_dump"],
+    "historical_own_agents": ["previous_champion"]
+  }
+}
