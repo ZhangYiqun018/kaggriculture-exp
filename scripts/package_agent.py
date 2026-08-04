@@ -20,7 +20,8 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src" / "kaggriculture_bot"
 
 # Fixed inline order: any module may only NAME dependencies on earlier ones.
-INLINE_MODULES = ["constants.py", "safety.py", "state.py", "economy.py"]
+INLINE_MODULES = ["constants.py", "safety.py", "state.py", "economy.py",
+                  "tasks.py", "assignment.py"]
 
 # Per-file import lines that must be dropped when inlining (they are hoisted to
 # the top of the bundle or already provided by earlier inlined modules).
@@ -35,6 +36,8 @@ STRIP_PREFIXES = (
     "from .safety import",
     "from .state import",
     "from .economy import",
+    "from .tasks import",
+    "from .assignment import",
     "from kaggriculture_bot",
 )
 
