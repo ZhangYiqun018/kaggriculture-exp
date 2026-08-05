@@ -1,5 +1,7 @@
 # 🚜 Kaggriculture Competitive Agent
 
+🌐 **Bilingual Navigation / 双语导航:** [中文版 (Chinese Version) 🇨🇳](README_zh.md)
+
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg?style=for-the-badge&logo=python)](https://www.python.org/)
 [![Kaggle environments](https://img.shields.io/badge/Kaggle_Environments-1.32.3-orange.svg?style=for-the-badge)](https://pypi.org/project/kaggle-environments/)
 [![Status](https://img.shields.io/badge/Status-Phase_3R.8_Complete-success.svg?style=for-the-badge)]()
