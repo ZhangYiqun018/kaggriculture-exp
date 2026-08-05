@@ -5,10 +5,10 @@ Evaluates the final consolidated system integrating Land, Strawberry, Dynamic hi
 
 | Crop Mode | Livestock Mode | Avg Candidate Cash | Avg Opponent Cash | Avg Money Margin | Win/Loss/Tie | Avg Outcome | Wilson LB | Weeds | WHEAT Rev | CARROT Rev | MELON Rev | STRAWBERRY Rev |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Crop-Only (Standard) | No Animals | $35081.9 | $174698.8 | $-139616.9 | 0/32/0 | 0.000 | 0.000 | 1.30 | $8100.0 | $12000.0 | $15000.0 | $0.0 |
-| Strawberry (+STRAWBERRY) | No Animals | $35276.2 | $174909.1 | $-139632.9 | 0/32/0 | 0.000 | 0.000 | 1.30 | $7800.0 | $11500.0 | $14000.0 | $1900.0 |
-| Crop-Only (Standard) | Cows & Sheep (+LIVESTOCK) | $27590.6 | $179375.0 | $-151784.4 | 0/32/0 | 0.000 | 0.000 | 3.00 | $8500.0 | $11000.0 | $8000.0 | $0.0 |
-| Strawberry (+STRAWBERRY) | Cows & Sheep (+LIVESTOCK) | $27559.3 | $179375.0 | $-151815.7 | 0/32/0 | 0.000 | 0.000 | 4.20 | $8000.0 | $10500.0 | $7000.0 | $2000.0 |
+| Crop-Only (Standard) | No Animals | $35081.9 | $174698.8 | $-139616.9 | 0/32/0 | 0.000 | 0.000 | 3.03 | $15935.2 | $247.8 | $26124.6 | $0.0 |
+| Strawberry (+STRAWBERRY) | No Animals | $35276.2 | $174909.1 | $-139632.9 | 0/32/0 | 0.000 | 0.000 | 4.28 | $15044.4 | $240.2 | $26125.0 | $1699.6 |
+| Crop-Only (Standard) | Cows & Sheep (+LIVESTOCK) | $29823.8 | $178346.5 | $-148522.7 | 0/32/0 | 0.000 | 0.000 | 2.31 | $96532.2 | $63.9 | $24664.7 | $0.0 |
+| Strawberry (+STRAWBERRY) | Cows & Sheep (+LIVESTOCK) | $29823.8 | $178346.5 | $-148522.7 | 0/32/0 | 0.000 | 0.000 | 2.31 | $96532.2 | $63.9 | $24664.7 | $0.0 |
 
 ## 2. Full Public Frontier Benchmark (Unified Champion)
 
@@ -27,8 +27,8 @@ The promoted unified champion is **`Strawberry, No-Livestock`**.
 ## 3. Causal & Synergistic Analysis
 
 - **Strawberry-Only Uplift (No Livestock, Cell 2 - Cell 1)**: **+194.3** average cash.
-- **Livestock-Only Impact (No Strawberry, Cell 3 - Cell 1)**: **-7491.3** average cash.
-- **Combined Synergistic Integration (v050 - Cell 1)**: **-7522.6** average cash.
+- **Livestock-Only Impact (No Strawberry, Cell 3 - Cell 1)**: **-5258.1** average cash.
+- **Combined Synergistic Integration (v050 - Cell 1)**: **-5258.1** average cash.
 
 - **Decision:** 
 Promote **`Strawberry, No-Livestock`** as it yields the highest cash baseline on the public field.

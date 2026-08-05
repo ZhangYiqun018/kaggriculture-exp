@@ -1525,14 +1525,15 @@ def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
         pending_cows = len([o for o in market_orders if o[0] == "BUY_ANIMAL" and o[1] == "COW"])
         pending_sheep = len([o for o in market_orders if o[0] == "BUY_ANIMAL" and o[1] == "SHEEP"])
         
-        # Support 2 cows + 2 sheep only
-        # Require safe money reserves
-        if total_cows + pending_cows < 2 and money >= cash_reserve + 400:
-            market_orders.append(["BUY_ANIMAL", "COW", 1])
-            money -= 400.0
-        if total_sheep + pending_sheep < 2 and money >= cash_reserve + 500:
-            market_orders.append(["BUY_ANIMAL", "SHEEP", 1])
-            money -= 500.0
+        # Support 2 cows + 2 sheep only (Stage v041 / v050)
+        # Limit purchases to day <= 14 and require robust cash reserve so we don't starve crops.
+        if 2 <= gs.day <= 14:
+            if total_cows + pending_cows < 2 and money >= cash_reserve + 1000:
+                market_orders.append(["BUY_ANIMAL", "COW", 1])
+                money -= 400.0
+            if total_sheep + pending_sheep < 2 and money >= cash_reserve + 1200:
+                market_orders.append(["BUY_ANIMAL", "SHEEP", 1])
+                money -= 500.0
             
         # Maintain WHEAT feed buffer
         total_animals = total_cows + total_sheep
