@@ -1,6 +1,6 @@
 # 🚜 Kaggriculture 竞赛智能体
 
-🌐 **双语导航 / Bilingual Navigation:** [English Version 🇺🇸](README.md)
+🌐 **双语导航 / Bilingual Navigation:** [English Version 🇺🇸](README.md) | [版本演进账本 📈](VERSIONS_zh.md)
 
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg?style=for-the-badge&logo=python)](https://www.python.org/)
 [![Kaggle environments](https://img.shields.io/badge/Kaggle_Environments-1.32.3-orange.svg?style=for-the-badge)](https://pypi.org/project/kaggle-environments/)
