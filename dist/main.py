@@ -218,6 +218,14 @@ class TileInfo:
     consecutive_unwatered: int = 0
     fertilized_until_day: int = -1
     max_lifespan_step: int = -1  # -1 for ongoing crops until max production reached
+    
+    # Animal/structure state (Stage v041)
+    animal_kind: str | None = None
+    animal_yield: int = 0
+    animal_unfed: int = 0
+    animal_cared_today: bool = False
+    animal_fed_today: bool = False
+    fertilizer_available: bool = False
 
     @property
     def empty(self) -> bool:
@@ -258,7 +266,33 @@ class TileInfo:
                 )
             if kind == "WEED":
                 return cls(x, y, "WEED")
-            return cls(x, y, kind)
+                
+            # Parse animal structure details (Stage v041)
+            animal_kind = None
+            animal_yield = 0
+            animal_unfed = 0
+            animal_cared_today = False
+            animal_fed_today = False
+            fert_avail = False
+            
+            animal_raw = g(raw, "animal")
+            if isinstance(animal_raw, dict):
+                animal_kind = g(animal_raw, "kind")
+                animal_yield = int(g(animal_raw, "yield_units", 0))
+                animal_unfed = int(g(animal_raw, "consecutive_unfed", 0))
+                animal_cared_today = bool(g(animal_raw, "cared_today", False))
+                animal_fed_today = bool(g(animal_raw, "fed_today", False))
+                fert_avail = bool(g(animal_raw, "fertilizer_available", False))
+                
+            return cls(
+                x, y, kind,
+                animal_kind=animal_kind,
+                animal_yield=animal_yield,
+                animal_unfed=animal_unfed,
+                animal_cared_today=animal_cared_today,
+                animal_fed_today=animal_fed_today,
+                fertilizer_available=fert_avail
+            )
         return cls(x, y, "UNKNOWN")
 
     @property
@@ -720,7 +754,17 @@ TASK_DIG = "DIG"
 TASK_DROP = "DROP"
 TASK_PASS = "PASS"
 
+# Livestock tasks (Stage v041)
+TASK_BUILD_PASTURE = "BUILD_PASTURE"
+TASK_PICKUP = "PICKUP"
+TASK_PLACE = "PLACE"
+TASK_FEED = "FEED"
+TASK_CARE = "CARE"
+TASK_COLLECT_FERTILIZER = "COLLECT_FERTILIZER"
+TASK_FERTILIZE = "FERTILIZE"
+
 SHED_ACCESS_TILES = [(4, 4), (4, 5), (5, 4), (5, 5)]
+PASTURE_TILES = [(3, 4), (4, 3), (3, 3), (2, 4)]
 
 
 @dataclass(frozen=True)
@@ -742,16 +786,20 @@ def _harvest_value(gs: GameState, crop: str, units: int) -> float:
     return float(sell_revenue(crop, int(units), inv))
 
 
-def generate_tasks(gs: GameState, managed_tiles: list[tuple[int, int]], crop_plan: dict[tuple[int, int], str] | None = None) -> list[Task]:
+def generate_tasks(gs: GameState, managed_tiles: list[tuple[int, int]], crop_plan: dict[tuple[int, int], str] | None = None, include_livestock: bool = False) -> list[Task]:
     """Generate candidate tasks for this turn from the parsed game state."""
     tasks: list[Task] = []
     day, step = gs.day, gs.step
     last_step_today = (day + 1) * TURNS_PER_DAY - 1
     farm = gs.self_farm
-    shed_total = sum(gs.private.shed.values())
+    shed = gs.private.shed
+    shed_total = sum(shed.values())
+
+    # Exclude pasture tiles from crops when livestock is active
+    if include_livestock:
+        managed_tiles = [t for t in managed_tiles if t not in PASTURE_TILES]
 
     # Calculate alternative crop profit per day to evaluate opportunity cost of waiting
-    # We pass all CROPS keys to ensure strawberry/tomato and other ongoing crops are included (Stage v040)
     ranking = crop_ranking(day, market_inventory={k: float(v) for k, v in gs.market.inventory.items()}, crops=list(CROPS.keys()))
     max_alt_profit_per_day = 0.0
     for cname, a in ranking.items():
@@ -777,13 +825,19 @@ def generate_tasks(gs: GameState, managed_tiles: list[tuple[int, int]], crop_pla
                         priority_tier=TIER_DECAY, deadline_step=last_step_today,
                         expected_value=value_now, crop=crop,
                     ))
+                elif include_livestock and tile.kind == "PASTURE" and tile.animal_kind and tile.animal_yield > 0:
+                    # Harvest animals at the very end
+                    tasks.append(Task(
+                        task_id=f"animal_harvest:{x},{y}", kind=TASK_HARVEST, target=(x, y),
+                        priority_tier=TIER_DECAY, deadline_step=last_step_today,
+                        expected_value=200.0,
+                    ))
                     
         # Generate target-specific return/drop tasks per carrying unit
         _generate_unit_drop_tasks(gs, tasks, last_step_today)
         return tasks
 
     # ---- Tier 4: PLANT empty managed tiles using the shared CropPlan
-    # We generate empty tiles list
     empty_tiles = []
     for x, y in managed_tiles:
         if farm.tile(x, y).empty:
@@ -871,7 +925,119 @@ def generate_tasks(gs: GameState, managed_tiles: list[tuple[int, int]], crop_pla
     # ---- Tier 5: DROP target-specific return/drop tasks per carrying unit
     _generate_unit_drop_tasks(gs, tasks, last_step_today)
 
+    # ---- Stage v041: Livestock Lifecycle Tasks ----
+    if include_livestock:
+        _generate_livestock_tasks(gs, tasks, last_step_today)
+
     return tasks
+
+
+def _generate_livestock_tasks(gs: GameState, tasks: list[Task], last_step_today: int):
+    """Generates all livestock build/buy/pickup/place/feed/care/harvest tasks."""
+    farm = gs.self_farm
+    shed = gs.private.shed
+    seeds = gs.private.seeds
+    inventories = gs.private.inventories
+
+    # 1. Check carrying animals
+    carrying_cow = any(inv.get("COW", 0) > 0 for inv in inventories)
+    carrying_sheep = any(inv.get("SHEEP", 0) > 0 for inv in inventories)
+
+    # 2. Iterate through designated PASTURE_TILES
+    for x, y in PASTURE_TILES:
+        tile = farm.tile(x, y)
+        
+        # A) Build PASTURE if empty
+        if tile.empty:
+            tasks.append(Task(
+                task_id=f"build_pasture:{x},{y}", kind=TASK_BUILD_PASTURE, target=(x, y),
+                priority_tier=TIER_ROUTINE, deadline_step=last_step_today,
+                expected_value=100.0,
+            ))
+            continue
+            
+        # B) If tile is PASTURE and has no animal placed
+        if tile.kind == "PASTURE" and not tile.animal_kind:
+            # If we are carrying an animal, place it!
+            if carrying_cow:
+                tasks.append(Task(
+                    task_id=f"place_cow:{x},{y}", kind=TASK_PLACE, target=(x, y),
+                    priority_tier=TIER_DECAY, deadline_step=last_step_today,
+                    expected_value=400.0, crop="COW",
+                ))
+            elif carrying_sheep:
+                tasks.append(Task(
+                    task_id=f"place_sheep:{x},{y}", kind=TASK_PLACE, target=(x, y),
+                    priority_tier=TIER_DECAY, deadline_step=last_step_today,
+                    expected_value=500.0, crop="SHEEP",
+                ))
+            # Else if we have bought animals waiting in shed, generate a PICKUP task!
+            elif shed.get("COW", 0) > 0:
+                tasks.append(Task(
+                    task_id=f"pickup_cow:{x},{y}", kind=TASK_PICKUP, target=None, # picked up from nearest shed tile
+                    priority_tier=TIER_LOGISTICS, deadline_step=last_step_today,
+                    expected_value=400.0, required_item="COW",
+                ))
+            elif shed.get("SHEEP", 0) > 0:
+                tasks.append(Task(
+                    task_id=f"pickup_sheep:{x},{y}", kind=TASK_PICKUP, target=None,
+                    priority_tier=TIER_LOGISTICS, deadline_step=last_step_today,
+                    expected_value=500.0, required_item="SHEEP",
+                ))
+            continue
+
+        # C) If tile has an animal, handle Feed, Care, and Harvest lifecycle
+        if tile.kind == "PASTURE" and tile.animal_kind:
+            ak = tile.animal_kind
+            
+            # Feed animal (Wheat required). Zero escape requirement: feed highly urgently if unfed >= 1.
+            if not tile.animal_fed_today:
+                dying = tile.animal_unfed >= 1
+                tasks.append(Task(
+                    task_id=f"feed:{ak}:{x},{y}", kind=TASK_FEED, target=(x, y),
+                    priority_tier=TIER_DYING if dying else TIER_ROUTINE,
+                    deadline_step=last_step_today,
+                    expected_value=200.0 if dying else 50.0,
+                    required_item="WHEAT",
+                ))
+                
+            # Care animal
+            if not tile.animal_cared_today:
+                tasks.append(Task(
+                    task_id=f"care:{ak}:{x},{y}", kind=TASK_CARE, target=(x, y),
+                    priority_tier=TIER_ROUTINE, deadline_step=last_step_today,
+                    expected_value=30.0,
+                ))
+                
+            # Harvest animal yield
+            if tile.animal_yield > 0:
+                tasks.append(Task(
+                    task_id=f"animal_harvest:{ak}:{x},{y}", kind=TASK_HARVEST, target=(x, y),
+                    priority_tier=TIER_HARVEST_HIGH, deadline_step=last_step_today,
+                    expected_value=250.0 if ak == "COW" else 300.0,
+                ))
+                
+            # Collect fertilizer
+            if tile.fertilizer_available:
+                tasks.append(Task(
+                    task_id=f"collect_fert:{x},{y}", kind=TASK_COLLECT_FERTILIZER, target=(x, y),
+                    priority_tier=TIER_LOGISTICS, deadline_step=last_step_today,
+                    expected_value=100.0,
+                ))
+
+    # 3. Route fertilizer to STRAWBERRY plants
+    # Only if we have FERTILIZER in shed, and we have growing STRAWBERRY that is not yet fertilized today.
+    # Marginal value of strawberry fertilized is +1 strawberry (~$120) which exceeds fertilizer sale value (~$100).
+    if shed.get("FERTILIZER", 0) > 0:
+        for y in range(farm.tiles.__len__()):
+            for x in range(farm.tiles[y].__len__()):
+                tile = farm.tiles[y][x]
+                if tile.kind == "PLANT" and tile.crop == "STRAWBERRY" and tile.fertilized_until_day <= gs.day:
+                    tasks.append(Task(
+                        task_id=f"fertilize_strawberry:{x},{y}", kind=TASK_FERTILIZE, target=(x, y),
+                        priority_tier=TIER_LOGISTICS, deadline_step=last_step_today,
+                        expected_value=120.0, required_item="FERTILIZER",
+                    ))
 
 
 def _generate_unit_drop_tasks(gs: GameState, tasks: list[Task], last_step_today: int):
@@ -886,7 +1052,14 @@ def _generate_unit_drop_tasks(gs: GameState, tasks: list[Task], last_step_today:
         if i >= len(unit_inventories):
             continue
         inv = unit_inventories[i]
-        qty = sum(inv.values())
+        
+        # In Stage v041, we do NOT want to drop COW or SHEEP to the shed (they must be placed on pasture).
+        # We also do NOT want to drop FERTILIZER if we plan to use it to fertilize, but dropping is safe.
+        # To be safe, we only drop product items (WHEAT, CARROT, TOMATO, STRAWBERRY, MELON, EGG, MILK, WOOL, FERTILIZER).
+        # We explicitly exclude animals "COW" or "SHEEP" from the sum.
+        carrying_items = {k: v for k, v in inv.items() if k not in ("COW", "SHEEP")}
+        qty = sum(carrying_items.values())
+        
         if qty > 0:
             pos = unit_positions[i]
             # Find the closest of the 4 shed-access tiles
@@ -944,6 +1117,9 @@ def units_from_state(gs: GameState) -> list[UnitView]:
 def _task_target_pos(task: Task) -> tuple[int, int] | None:
     if task.kind == TASK_DROP:
         return _DROP_TARGET
+    if task.kind == "PICKUP" and task.target is None:
+        # return canonical shed tile for pickup
+        return (4, 4)
     return task.target
 
 
@@ -954,7 +1130,7 @@ def _conflict_key(task: Task) -> str | None:
     one unit can work on a tile per turn.
     """
     if task.kind == TASK_DROP:
-        return "shed:drop"
+        return f"shed:drop:{task.task_id}" # make it unique per unit
     if task.target is not None:
         return f"tile:{task.target[0]},{task.target[1]}"
     return None
@@ -977,9 +1153,26 @@ def _feasible(task: Task, gs: GameState, unit: UnitView, seed_ledger: dict[str, 
         if hours_left <= 1:
             return False
 
+    # 1.5) Feed / Fertilizer / Pickup / Place feasibility checks (Stage v041)
+    if task.kind == "FEED":
+        # must have WHEAT in hand inventory to feed!
+        return unit.inventory.get("WHEAT", 0) > 0
+    if task.kind == "FERTILIZE":
+        # must have FERTILIZER in hand inventory to fertilize!
+        return unit.inventory.get("FERTILIZER", 0) > 0
+    if task.kind == "PLACE":
+        # must have the corresponding animal in hand inventory to place!
+        return unit.inventory.get(task.crop or "", 0) > 0
+    if task.kind == "PICKUP":
+        # must NOT already have full hand inventory
+        return sum(unit.inventory.values()) < 10
+
     # 2) Carrying check for DROP
     if task.kind == TASK_DROP:
-        return sum(unit.inventory.values()) > 0
+        # We drop WHEAT, CARROT, TOMATO, STRAWBERRY, MELON, EGG, MILK, WOOL, FERTILIZER.
+        # Exclude animals COW and SHEEP so we don't drop them back.
+        carrying_items = {k: v for k, v in unit.inventory.items() if k not in ("COW", "SHEEP")}
+        return sum(carrying_items.values()) > 0
 
     # 3) Reachability checks
     tgt = _task_target_pos(task)
@@ -1069,7 +1262,30 @@ def _action_for(unit: UnitView, task: Task, tgt: tuple[int, int] | None) -> list
         if task.kind == TASK_DIG:
             return ["DIG"]
         if task.kind == TASK_DROP:
-            return ["DROP"]
+            # We only drop items that are not animals
+            carrying_items = {k: v for k, v in unit.inventory.items() if k not in ("COW", "SHEEP")}
+            # If the unit has more than one item type, we drop the first one
+            for k, v in carrying_items.items():
+                if v > 0:
+                    return ["DROP", k, v]
+            return ["PASS"]
+            
+        # Livestock actions (Stage v041)
+        if task.kind == "BUILD_PASTURE":
+            return ["BUILD_PASTURE"]
+        if task.kind == "PICKUP":
+            return ["PICKUP", task.required_item, 1]
+        if task.kind == "PLACE":
+            return ["PLACE", task.crop]
+        if task.kind == "FEED":
+            return ["FEED"]
+        if task.kind == "CARE":
+            return ["CARE"]
+        if task.kind == "COLLECT_FERTILIZER":
+            return ["COLLECT_FERTILIZER"]
+        if task.kind == "FERTILIZE":
+            return ["FERTILIZE"]
+            
     if tgt is None:
         return ["PASS"]
     fx, fy = unit.pos
@@ -1260,7 +1476,8 @@ def _seed_demand(gs: GameState, tasks: list[Task], crop_plan: dict[tuple[int, in
 def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
                        crop_plan: dict[tuple[int, int], str] | None = None,
                        land_orders: list[list] | None = None,
-                       cash_reserve: int = 400) -> list[list]:
+                       cash_reserve: int = 400,
+                       include_livestock: bool = False) -> list[list]:
     """Compile optimal market orders, respecting the 10-order limit."""
     market_orders: list[list] = []
     step = gs.step
@@ -1281,6 +1498,52 @@ def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
         for order in land_orders:
             market_orders.append(order)
             money -= 1000.0  # NE cost is 1000
+
+    # 1.6. Livestock purchase and Wheat buffer management (Stage v041)
+    if include_livestock:
+        # Count existing and planned animals to support 2 cows + 2 sheep only
+        cows_on_board = 0
+        sheep_on_board = 0
+        for row in farm.tiles:
+            for tile in row:
+                if tile.kind == "PASTURE" and tile.animal_kind:
+                    if tile.animal_kind == "COW":
+                        cows_on_board += 1
+                    elif tile.animal_kind == "SHEEP":
+                        sheep_on_board += 1
+                        
+        cows_carrying = sum(inv.get("COW", 0) for inv in gs.private.inventories)
+        sheep_carrying = sum(inv.get("SHEEP", 0) for inv in gs.private.inventories)
+        
+        cows_in_shed = shed.get("COW", 0)
+        sheep_in_shed = shed.get("SHEEP", 0)
+        
+        total_cows = cows_on_board + cows_carrying + cows_in_shed
+        total_sheep = sheep_on_board + sheep_carrying + sheep_in_shed
+        
+        # We also count any pending BUY_ANIMAL orders we are submitting this turn
+        pending_cows = len([o for o in market_orders if o[0] == "BUY_ANIMAL" and o[1] == "COW"])
+        pending_sheep = len([o for o in market_orders if o[0] == "BUY_ANIMAL" and o[1] == "SHEEP"])
+        
+        # Support 2 cows + 2 sheep only
+        # Require safe money reserves
+        if total_cows + pending_cows < 2 and money >= cash_reserve + 400:
+            market_orders.append(["BUY_ANIMAL", "COW", 1])
+            money -= 400.0
+        if total_sheep + pending_sheep < 2 and money >= cash_reserve + 500:
+            market_orders.append(["BUY_ANIMAL", "SHEEP", 1])
+            money -= 500.0
+            
+        # Maintain WHEAT feed buffer
+        total_animals = total_cows + total_sheep
+        if total_animals > 0:
+            wheat_buffer = max(10, 5 * total_animals)
+            current_wheat = shed.get("WHEAT", 0)
+            if current_wheat < wheat_buffer and money >= cash_reserve + 25:
+                buy_qty = int(wheat_buffer - current_wheat)
+                market_orders.append(["BUY_PRODUCT", "WHEAT", buy_qty])
+                # approximate cost of WHEAT product: base is 25
+                money -= 25.0 * buy_qty
 
     # 2. Compile HIRE orders via sequential marginal hiring using dynamic cash_reserve
     optimal_hires = plan_hires(gs, tasks, max_hands=max_hands_day, cash_reserve=cash_reserve)
@@ -1364,9 +1627,10 @@ def hand_count_from_obs(obs) -> int:
 
 
 
-# Ablation Flags (settable by the evaluation script)
+# Master Ablation Flags (patchable by evaluation suite)
 INCLUDE_STRAWBERRY = True
 INCLUDE_LAND = True
+INCLUDE_LIVESTOCK = False
 
 _EP = {}
 
@@ -1385,23 +1649,28 @@ def core_agent(obs, config=None):
     private = gs.private
     seeds = private.seeds
 
-    # 1. Compute lightweight DailyPlan (including active tiles, CropPlan, target hands, and land orders)
+    # 1. Compute DailyPlan incorporating land, strawberry and livestock
     dp = compute_daily_plan(gs, include_strawberry=INCLUDE_STRAWBERRY, include_land=INCLUDE_LAND)
 
-    # 2. Generate Tasks based on active tiles and CropPlan
-    tasks = generate_tasks(gs, dp.active_tiles, crop_plan=dp.crop_plan)
+    # 2. Generate tasks (watering, digging, planting, harvesting, livestock lifecycle, fertilizing)
+    tasks = generate_tasks(
+        gs, dp.active_tiles,
+        crop_plan=dp.crop_plan,
+        include_livestock=INCLUDE_LIVESTOCK
+    )
     assignments = greedy_assign(gs, tasks)
 
     farmer_action = assignments[0].action if assignments else ["PASS"]
     hands_actions = [a.action for a in assignments[1:]]
 
-    # 3. Market orders incorporating land purchases and dynamic cash reserves
+    # 3. Market orders incorporating sequential hiring, wheat feed buffers, and animal purchases
     market = plan_market_orders(
         gs, tasks,
         max_hands_day=dp.target_hands,
         crop_plan=dp.crop_plan,
         land_orders=dp.land_orders,
-        cash_reserve=dp.cash_reserve
+        cash_reserve=dp.cash_reserve,
+        include_livestock=INCLUDE_LIVESTOCK
     )
 
     return safe_action(

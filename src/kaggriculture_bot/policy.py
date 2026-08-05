@@ -51,7 +51,8 @@ def _seed_demand(gs: GameState, tasks: list[Task], crop_plan: dict[tuple[int, in
 def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
                        crop_plan: dict[tuple[int, int], str] | None = None,
                        land_orders: list[list] | None = None,
-                       cash_reserve: int = 400) -> list[list]:
+                       cash_reserve: int = 400,
+                       include_livestock: bool = False) -> list[list]:
     """Compile optimal market orders, respecting the 10-order limit."""
     market_orders: list[list] = []
     step = gs.step
@@ -72,6 +73,52 @@ def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
         for order in land_orders:
             market_orders.append(order)
             money -= 1000.0  # NE cost is 1000
+
+    # 1.6. Livestock purchase and Wheat buffer management (Stage v041)
+    if include_livestock:
+        # Count existing and planned animals to support 2 cows + 2 sheep only
+        cows_on_board = 0
+        sheep_on_board = 0
+        for row in farm.tiles:
+            for tile in row:
+                if tile.kind == "PASTURE" and tile.animal_kind:
+                    if tile.animal_kind == "COW":
+                        cows_on_board += 1
+                    elif tile.animal_kind == "SHEEP":
+                        sheep_on_board += 1
+                        
+        cows_carrying = sum(inv.get("COW", 0) for inv in gs.private.inventories)
+        sheep_carrying = sum(inv.get("SHEEP", 0) for inv in gs.private.inventories)
+        
+        cows_in_shed = shed.get("COW", 0)
+        sheep_in_shed = shed.get("SHEEP", 0)
+        
+        total_cows = cows_on_board + cows_carrying + cows_in_shed
+        total_sheep = sheep_on_board + sheep_carrying + sheep_in_shed
+        
+        # We also count any pending BUY_ANIMAL orders we are submitting this turn
+        pending_cows = len([o for o in market_orders if o[0] == "BUY_ANIMAL" and o[1] == "COW"])
+        pending_sheep = len([o for o in market_orders if o[0] == "BUY_ANIMAL" and o[1] == "SHEEP"])
+        
+        # Support 2 cows + 2 sheep only
+        # Require safe money reserves
+        if total_cows + pending_cows < 2 and money >= cash_reserve + 400:
+            market_orders.append(["BUY_ANIMAL", "COW", 1])
+            money -= 400.0
+        if total_sheep + pending_sheep < 2 and money >= cash_reserve + 500:
+            market_orders.append(["BUY_ANIMAL", "SHEEP", 1])
+            money -= 500.0
+            
+        # Maintain WHEAT feed buffer
+        total_animals = total_cows + total_sheep
+        if total_animals > 0:
+            wheat_buffer = max(10, 5 * total_animals)
+            current_wheat = shed.get("WHEAT", 0)
+            if current_wheat < wheat_buffer and money >= cash_reserve + 25:
+                buy_qty = int(wheat_buffer - current_wheat)
+                market_orders.append(["BUY_PRODUCT", "WHEAT", buy_qty])
+                # approximate cost of WHEAT product: base is 25
+                money -= 25.0 * buy_qty
 
     # 2. Compile HIRE orders via sequential marginal hiring using dynamic cash_reserve
     optimal_hires = plan_hires(gs, tasks, max_hands=max_hands_day, cash_reserve=cash_reserve)

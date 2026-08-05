@@ -29,6 +29,14 @@ class TileInfo:
     consecutive_unwatered: int = 0
     fertilized_until_day: int = -1
     max_lifespan_step: int = -1  # -1 for ongoing crops until max production reached
+    
+    # Animal/structure state (Stage v041)
+    animal_kind: str | None = None
+    animal_yield: int = 0
+    animal_unfed: int = 0
+    animal_cared_today: bool = False
+    animal_fed_today: bool = False
+    fertilizer_available: bool = False
 
     @property
     def empty(self) -> bool:
@@ -69,7 +77,33 @@ class TileInfo:
                 )
             if kind == "WEED":
                 return cls(x, y, "WEED")
-            return cls(x, y, kind)
+                
+            # Parse animal structure details (Stage v041)
+            animal_kind = None
+            animal_yield = 0
+            animal_unfed = 0
+            animal_cared_today = False
+            animal_fed_today = False
+            fert_avail = False
+            
+            animal_raw = g(raw, "animal")
+            if isinstance(animal_raw, dict):
+                animal_kind = g(animal_raw, "kind")
+                animal_yield = int(g(animal_raw, "yield_units", 0))
+                animal_unfed = int(g(animal_raw, "consecutive_unfed", 0))
+                animal_cared_today = bool(g(animal_raw, "cared_today", False))
+                animal_fed_today = bool(g(animal_raw, "fed_today", False))
+                fert_avail = bool(g(animal_raw, "fertilizer_available", False))
+                
+            return cls(
+                x, y, kind,
+                animal_kind=animal_kind,
+                animal_yield=animal_yield,
+                animal_unfed=animal_unfed,
+                animal_cared_today=animal_cared_today,
+                animal_fed_today=animal_fed_today,
+                fertilizer_available=fert_avail
+            )
         return cls(x, y, "UNKNOWN")
 
     @property

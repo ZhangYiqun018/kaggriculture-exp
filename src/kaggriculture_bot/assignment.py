@@ -42,6 +42,9 @@ def units_from_state(gs: GameState) -> list[UnitView]:
 def _task_target_pos(task: Task) -> tuple[int, int] | None:
     if task.kind == TASK_DROP:
         return _DROP_TARGET
+    if task.kind == "PICKUP" and task.target is None:
+        # return canonical shed tile for pickup
+        return (4, 4)
     return task.target
 
 
@@ -52,7 +55,7 @@ def _conflict_key(task: Task) -> str | None:
     one unit can work on a tile per turn.
     """
     if task.kind == TASK_DROP:
-        return "shed:drop"
+        return f"shed:drop:{task.task_id}" # make it unique per unit
     if task.target is not None:
         return f"tile:{task.target[0]},{task.target[1]}"
     return None
@@ -75,9 +78,26 @@ def _feasible(task: Task, gs: GameState, unit: UnitView, seed_ledger: dict[str, 
         if hours_left <= 1:
             return False
 
+    # 1.5) Feed / Fertilizer / Pickup / Place feasibility checks (Stage v041)
+    if task.kind == "FEED":
+        # must have WHEAT in hand inventory to feed!
+        return unit.inventory.get("WHEAT", 0) > 0
+    if task.kind == "FERTILIZE":
+        # must have FERTILIZER in hand inventory to fertilize!
+        return unit.inventory.get("FERTILIZER", 0) > 0
+    if task.kind == "PLACE":
+        # must have the corresponding animal in hand inventory to place!
+        return unit.inventory.get(task.crop or "", 0) > 0
+    if task.kind == "PICKUP":
+        # must NOT already have full hand inventory
+        return sum(unit.inventory.values()) < 10
+
     # 2) Carrying check for DROP
     if task.kind == TASK_DROP:
-        return sum(unit.inventory.values()) > 0
+        # We drop WHEAT, CARROT, TOMATO, STRAWBERRY, MELON, EGG, MILK, WOOL, FERTILIZER.
+        # Exclude animals COW and SHEEP so we don't drop them back.
+        carrying_items = {k: v for k, v in unit.inventory.items() if k not in ("COW", "SHEEP")}
+        return sum(carrying_items.values()) > 0
 
     # 3) Reachability checks
     tgt = _task_target_pos(task)
@@ -167,7 +187,30 @@ def _action_for(unit: UnitView, task: Task, tgt: tuple[int, int] | None) -> list
         if task.kind == TASK_DIG:
             return ["DIG"]
         if task.kind == TASK_DROP:
-            return ["DROP"]
+            # We only drop items that are not animals
+            carrying_items = {k: v for k, v in unit.inventory.items() if k not in ("COW", "SHEEP")}
+            # If the unit has more than one item type, we drop the first one
+            for k, v in carrying_items.items():
+                if v > 0:
+                    return ["DROP", k, v]
+            return ["PASS"]
+            
+        # Livestock actions (Stage v041)
+        if task.kind == "BUILD_PASTURE":
+            return ["BUILD_PASTURE"]
+        if task.kind == "PICKUP":
+            return ["PICKUP", task.required_item, 1]
+        if task.kind == "PLACE":
+            return ["PLACE", task.crop]
+        if task.kind == "FEED":
+            return ["FEED"]
+        if task.kind == "CARE":
+            return ["CARE"]
+        if task.kind == "COLLECT_FERTILIZER":
+            return ["COLLECT_FERTILIZER"]
+        if task.kind == "FERTILIZE":
+            return ["FERTILIZE"]
+            
     if tgt is None:
         return ["PASS"]
     fx, fy = unit.pos
