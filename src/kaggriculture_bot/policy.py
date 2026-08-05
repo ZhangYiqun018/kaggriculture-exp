@@ -113,8 +113,8 @@ def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
             target_sheep = 2
 
         # Support dynamic cows + sheep scaling
-        # Limit purchases to day <= 16 and require robust cash reserve so we don't starve crops.
-        if 2 <= gs.day <= 16:
+        # Limit purchases to day >= 11 and day <= 18 to prevent early capital starvation
+        if 11 <= gs.day <= 18:
             if total_cows + pending_cows < target_cows and money >= cash_reserve + 600:
                 market_orders.append(["BUY_ANIMAL", "COW", 1])
                 money -= 400.0

@@ -1,16 +1,16 @@
 # Phase 3.6: Public Opponents Frontier Benchmark Report (v060)
-**Candidate:** `/Users/yiqun/Documents/proj/kaggriculture-exp-v060/dist/main.py` (v060_market_control with market-aware allocation, NPV harvesting, chunked selling, and liquidation)
+**Candidate:** `/Users/yiqun/Documents/proj/kaggriculture-exp/dist/main.py` (v060_market_control with market-aware allocation, NPV harvesting, chunked selling, and liquidation)
 **Evaluated on:** 8 Screen Seeds × 2 seats = 16 matches per opponent against full registered public roster.
 
 ## 1. Roster Summary & Macro Ratings
 
 | Opponent Family | Opponent | N | Wins | Losses | Ties | Avg Outcome | Avg Candidate $ | Avg Opponent $ | Avg Money Margin | Wilson LB 95% |
 |---|---|---|---|---|---|---|---|---|---|---|
-| replay_tape_lineage | `moon` | 16 | 0 | 16 | 0 | 0.000 | $30883 | $173009 | $-142126 | 0.000 |
-| replay_tape_lineage | `soil` | 16 | 0 | 16 | 0 | 0.000 | $30883 | $173009 | $-142126 | 0.000 |
-| replay_tape_lineage | `roman_anchor` | 16 | 0 | 16 | 0 | 0.000 | $29407 | $170577 | $-141170 | 0.000 |
-| learned_market_ranker | `kaito_v17` | 16 | 0 | 16 | 0 | 0.000 | $30468 | $174775 | $-144307 | 0.000 |
-| economic_control | `pilkwang` | 16 | 0 | 16 | 0 | 0.000 | $17075 | $158877 | $-141803 | 0.000 |
+| replay_tape_lineage | `moon` | 16 | 0 | 16 | 0 | 0.000 | $30094 | $176846 | $-146752 | 0.000 |
+| replay_tape_lineage | `soil` | 16 | 0 | 16 | 0 | 0.000 | $30094 | $176846 | $-146752 | 0.000 |
+| replay_tape_lineage | `roman_anchor` | 16 | 0 | 16 | 0 | 0.000 | $29843 | $171771 | $-141928 | 0.000 |
+| learned_market_ranker | `kaito_v17` | 16 | 0 | 16 | 0 | 0.000 | $30584 | $175964 | $-145380 | 0.000 |
+| economic_control | `pilkwang` | 16 | 0 | 16 | 0 | 0.000 | $26006 | $154693 | $-128686 | 0.000 |
 
 ## 2. Opponent Family Macro-Averages
 
@@ -39,26 +39,26 @@ Demonstrates daily cash, crop counts, market prices, and hire counts at the end 
 | 8 | $1677.0 | 4 | WHEAT:6, MELON:17 | $34 / $38 / $276 |
 | 9 | $1650.0 | 4 | WHEAT:5, MELON:17 | $35 / $38 / $277 |
 | 10 | $637.0 | 7 | MELON:8, WHEAT:1 | $37 / $39 / $250 |
-| 11 | $5552.0 | 13 | MELON:10, WHEAT:11, STRAWBERRY:11, CARROT:1 | $38 / $39 / $214 |
-| 12 | $11802.0 | 13 | MELON:10, WHEAT:13, STRAWBERRY:22, CARROT:2 | $37 / $39 / $133 |
-| 13 | $12315.0 | 4 | MELON:10, STRAWBERRY:21, WHEAT:1 | $40 / $39 / $133 |
-| 14 | $12266.0 | 13 | MELON:9, WHEAT:15, STRAWBERRY:21 | $40 / $39 / $142 |
-| 15 | $12922.0 | 10 | MELON:9, WHEAT:13, STRAWBERRY:21 | $41 / $39 / $111 |
-| 16 | $12828.0 | 8 | MELON:9, STRAWBERRY:21, WHEAT:4 | $42 / $39 / $120 |
-| 17 | $13386.0 | 0 | MELON:9, STRAWBERRY:21, WHEAT:3 | $42 / $40 / $120 |
-| 18 | $13379.0 | 4 | MELON:9, STRAWBERRY:12, WHEAT:2 | $43 / $40 / $129 |
-| 19 | $13456.0 | 2 | MELON:9, STRAWBERRY:6 | $44 / $40 / $138 |
-| 20 | $12970.0 | 12 | MELON:9, STRAWBERRY:6, WHEAT:4 | $45 / $40 / $154 |
-| 21 | $12231.0 | 13 | MELON:6, WHEAT:40, STRAWBERRY:6 | $45 / $40 / $165 |
-| 22 | $14670.0 | 13 | WHEAT:45, STRAWBERRY:6 | $47 / $41 / $133 |
-| 23 | $17151.0 | 13 | WHEAT:43, STRAWBERRY:6 | $48 / $41 / $101 |
-| 24 | $17046.0 | 13 | WHEAT:49, STRAWBERRY:6 | $49 / $41 / $106 |
-| 25 | $17081.0 | 13 | WHEAT:22, STRAWBERRY:6 | $50 / $41 / $96 |
-| 26 | $20735.0 | 13 | WHEAT:43, STRAWBERRY:6 | $49 / $41 / $101 |
-| 27 | $22120.0 | 11 | WHEAT:43, STRAWBERRY:6 | $50 / $41 / $106 |
-| 28 | $22912.0 | 11 | STRAWBERRY:4, WHEAT:8 | $51 / $42 / $115 |
-| 29 | $28037.0 | 0 | None | $48 / $42 / $65 |
+| 11 | $9819.0 | 11 | MELON:12, WHEAT:22 | $38 / $39 / $214 |
+| 12 | $17452.0 | 11 | MELON:12, WHEAT:25, STRAWBERRY:8 | $37 / $39 / $129 |
+| 13 | $13249.0 | 13 | MELON:12, WHEAT:8, STRAWBERRY:10 | $40 / $39 / $133 |
+| 14 | $13930.0 | 13 | MELON:11, WHEAT:3, STRAWBERRY:15 | $39 / $39 / $142 |
+| 15 | $14928.0 | 7 | MELON:11, WHEAT:6, STRAWBERRY:15 | $40 / $39 / $111 |
+| 16 | $14686.0 | 11 | MELON:11, STRAWBERRY:16, WHEAT:4 | $42 / $39 / $120 |
+| 17 | $14598.0 | 9 | MELON:11, STRAWBERRY:16, WHEAT:3 | $42 / $40 / $120 |
+| 18 | $14672.0 | 0 | MELON:11, STRAWBERRY:15, WHEAT:2 | $43 / $40 / $129 |
+| 19 | $14658.0 | 3 | MELON:11, STRAWBERRY:9 | $44 / $40 / $138 |
+| 20 | $14071.0 | 13 | MELON:11, WHEAT:11, STRAWBERRY:9 | $45 / $40 / $154 |
+| 21 | $13362.0 | 13 | MELON:9, WHEAT:20, STRAWBERRY:9 | $46 / $40 / $165 |
+| 22 | $14389.0 | 13 | WHEAT:27, STRAWBERRY:9, MELON:1 | $47 / $40 / $146 |
+| 23 | $17427.0 | 13 | WHEAT:43, STRAWBERRY:9 | $48 / $41 / $101 |
+| 24 | $17266.0 | 13 | WHEAT:44, STRAWBERRY:9 | $49 / $41 / $106 |
+| 25 | $18898.0 | 13 | WHEAT:43, STRAWBERRY:9 | $50 / $41 / $96 |
+| 26 | $19898.0 | 13 | WHEAT:37, STRAWBERRY:9 | $50 / $41 / $101 |
+| 27 | $22144.0 | 13 | WHEAT:27, STRAWBERRY:9 | $50 / $41 / $106 |
+| 28 | $25911.0 | 9 | WHEAT:13, STRAWBERRY:9 | $50 / $41 / $115 |
+| 29 | $31220.0 | 3 | STRAWBERRY:6, WHEAT:3 | $48 / $41 / $37 |
 
 ### Terminal State Inventory (Seed 101, Seat 0)
 - **Terminal Shed Inventory:** `{'WHEAT': 0, 'CARROT': 0, 'TOMATO': 0, 'STRAWBERRY': 0, 'MELON': 0, 'EGG': 0, 'MILK': 0, 'WOOL': 0, 'FERTILIZER': 0, 'GOOSE': 0, 'COW': 0, 'SHEEP': 0}`
-- **Terminal Carry Inventory:** `[{'WHEAT': 8}]`
+- **Terminal Carry Inventory:** `[{'STRAWBERRY': 1, 'WHEAT': 4}, {'STRAWBERRY': 1, 'WHEAT': 3}, {'WHEAT': 1}, {'WHEAT': 2}]`

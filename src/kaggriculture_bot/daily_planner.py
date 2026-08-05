@@ -50,20 +50,19 @@ def compute_daily_plan(gs: GameState, include_strawberry: bool = True, include_l
         active_tiles = active_tiles + sw_tiles
 
     # 2. Buy land conditionally (to unlock NE first, then SW)
+    # Stagger land purchases to day >= 11 (after first Melon harvests) to prevent early capital starvation
     land_orders = []
     cash_reserve = 400
     
     if include_land:
         if "NE" not in unlocked:
-            # NE cost is $1000. Require day <= 20 and at least $1800 (leaving $800 capital)
-            if 4 <= day <= 20 and money >= 1800:
-                land_orders.append(["BUY_LAND"])
-                cash_reserve = 500
-        elif "SW" not in unlocked:
-            # SW cost is $2000. Require day <= 20 and at least $3000 (leaving $1000 capital)
-            if 6 <= day <= 20 and money >= 3000:
+            # NE cost is $1000. Require day >= 11 and at least $2500 (leaving $1500 capital)
+            if 11 <= day <= 20 and money >= 2500:
                 land_orders.append(["BUY_LAND"])
                 cash_reserve = 600
+        elif "SW" not in unlocked:
+            # SW cost is $2000. Require day >= 13 and at least $4000 (leaving $2000 capital)
+            if 13 <= day <= 20 and money >= 4000:
                 land_orders.append(["BUY_LAND"])
                 cash_reserve = 800
 
