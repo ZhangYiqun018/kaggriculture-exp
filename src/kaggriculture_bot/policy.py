@@ -48,7 +48,10 @@ def _seed_demand(gs: GameState, tasks: list[Task], crop_plan: dict[tuple[int, in
     return {c: max(0, n - held.get(c, 0)) for c, n in need.items()}
 
 
-def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6, crop_plan: dict[tuple[int, int], str] | None = None) -> list[list]:
+def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
+                       crop_plan: dict[tuple[int, int], str] | None = None,
+                       land_orders: list[list] | None = None,
+                       cash_reserve: int = 400) -> list[list]:
     """Compile optimal market orders, respecting the 10-order limit."""
     market_orders: list[list] = []
     step = gs.step
@@ -64,8 +67,14 @@ def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
                 market_orders.append(["SELL", item, qty])
         return market_orders[:MAX_MARKET_ORDERS]
 
-    # 2. Compile HIRE orders via sequential marginal hiring
-    optimal_hires = plan_hires(gs, tasks, max_hands=max_hands_day, cash_reserve=400)
+    # 1.5. Process land orders first (Stage v040)
+    if land_orders:
+        for order in land_orders:
+            market_orders.append(order)
+            money -= 1000.0  # NE cost is 1000
+
+    # 2. Compile HIRE orders via sequential marginal hiring using dynamic cash_reserve
+    optimal_hires = plan_hires(gs, tasks, max_hands=max_hands_day, cash_reserve=cash_reserve)
     for _ in range(optimal_hires):
         market_orders.append(["HIRE"])
 

@@ -63,7 +63,8 @@ def generate_tasks(gs: GameState, managed_tiles: list[tuple[int, int]], crop_pla
     shed_total = sum(gs.private.shed.values())
 
     # Calculate alternative crop profit per day to evaluate opportunity cost of waiting
-    ranking = crop_ranking(day, market_inventory={k: float(v) for k, v in gs.market.inventory.items()})
+    # We pass all CROPS keys to ensure strawberry/tomato and other ongoing crops are included (Stage v040)
+    ranking = crop_ranking(day, market_inventory={k: float(v) for k, v in gs.market.inventory.items()}, crops=list(CROPS.keys()))
     max_alt_profit_per_day = 0.0
     for cname, a in ranking.items():
         if a["feasible"] and a["profit_per_day"] > max_alt_profit_per_day:

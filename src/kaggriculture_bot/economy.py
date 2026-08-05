@@ -115,14 +115,25 @@ def crop_analysis(crop: str, current_day: int,
     """Full economics for one crop at one day. Does NOT decide anything."""
     c = CROPS[crop]
     is_feasible = viable(crop, current_day, harvest_buffer)
+    harvest_age = 0
 
     # For one-time crops: harvest at max_yield_day (max unfertilized yield).
     # If horizon cuts it short, clamp harvest age to what fits.
     if c["ongoing"]:
-        # For ongoing crops, Phase 3 does not use them; report basic first-tick info.
-        harvest_age = c["first_yield_day"]
-        units = expected_yield(crop, harvest_age)
-        cycle_days = max(1, c["first_yield_day"])
+        # 1. Full-horizon ongoing crop economics (Stage v040)
+        # first_yield_day is when the first harvest of 1 unit happens.
+        # Every interval days after that, another unit is produced, up to max_yield.
+        first_harvest = current_day + c["first_yield_day"]
+        days_available = LAST_GAME_DAY - harvest_buffer - first_harvest
+        if days_available < 0:
+            units = 0
+            cycle_days = 1
+            is_feasible = False
+            harvest_age = 0
+        else:
+            units = min(c["max_yield"], 1 + (days_available // c["interval"]))
+            cycle_days = c["first_yield_day"] + (units - 1) * c["interval"]
+            harvest_age = cycle_days
     else:
         harvest_age = min(c["max_yield_day"], LAST_GAME_DAY - current_day)
         units = expected_yield(crop, harvest_age)

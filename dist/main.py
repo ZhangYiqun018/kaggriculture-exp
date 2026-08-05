@@ -487,14 +487,25 @@ def crop_analysis(crop: str, current_day: int,
     """Full economics for one crop at one day. Does NOT decide anything."""
     c = CROPS[crop]
     is_feasible = viable(crop, current_day, harvest_buffer)
+    harvest_age = 0
 
     # For one-time crops: harvest at max_yield_day (max unfertilized yield).
     # If horizon cuts it short, clamp harvest age to what fits.
     if c["ongoing"]:
-        # For ongoing crops, Phase 3 does not use them; report basic first-tick info.
-        harvest_age = c["first_yield_day"]
-        units = expected_yield(crop, harvest_age)
-        cycle_days = max(1, c["first_yield_day"])
+        # 1. Full-horizon ongoing crop economics (Stage v040)
+        # first_yield_day is when the first harvest of 1 unit happens.
+        # Every interval days after that, another unit is produced, up to max_yield.
+        first_harvest = current_day + c["first_yield_day"]
+        days_available = LAST_GAME_DAY - harvest_buffer - first_harvest
+        if days_available < 0:
+            units = 0
+            cycle_days = 1
+            is_feasible = False
+            harvest_age = 0
+        else:
+            units = min(c["max_yield"], 1 + (days_available // c["interval"]))
+            cycle_days = c["first_yield_day"] + (units - 1) * c["interval"]
+            harvest_age = cycle_days
     else:
         harvest_age = min(c["max_yield_day"], LAST_GAME_DAY - current_day)
         units = expected_yield(crop, harvest_age)
@@ -613,6 +624,84 @@ def get_crop_plan(gs: GameState, empty_tiles: list[tuple[int, int]], crops_pool:
 
     return plan
 
+# ===== INLINED: kaggriculture_bot/daily_planner.py =====
+
+
+
+
+@dataclass
+class DailyPlan:
+    active_tiles: list[tuple[int, int]]
+    crop_plan: dict[tuple[int, int], str]
+    target_hands: int
+    land_orders: list[list]
+    cash_reserve: int
+
+
+def compute_daily_plan(gs: GameState, include_strawberry: bool = True, include_land: bool = True) -> DailyPlan:
+    day = gs.day
+    money = gs.self_farm.money
+    unlocked = gs.self_farm.unlocked_quadrants
+
+    # Define layout profiles
+    nearest_16 = [
+        (3, 4), (4, 3), (2, 4), (3, 3), (4, 2), (1, 4), (2, 3), (3, 2),
+        (4, 1), (0, 4), (1, 3), (2, 2), (3, 1), (4, 0), (0, 3), (1, 2)
+    ]
+    all_nw = [(x, y) for y in range(5) for x in range(5) if (x, y) != (4, 4)]
+
+    # 1. Start from nearest_16, activate all 25 NW tiles when workload allows (day >= 4 and money >= 1200)
+    if day >= 4 and money >= 1200:
+        active_tiles = all_nw
+    else:
+        active_tiles = nearest_16
+
+    # If NE is unlocked, we add all 25 plantable tiles in NE quadrant!
+    if "NE" in unlocked:
+        ne_tiles = [(x, y) for y in range(5) for x in range(5, 10) if (x, y) != (5, 4)]
+        active_tiles = active_tiles + ne_tiles
+
+    # 2. Buy land conditionally (to unlock NE)
+    land_orders = []
+    cash_reserve = 400
+    if include_land and "NE" not in unlocked and 10 <= day <= 18:
+        # Check safe cash reserve: land cost is $1000.
+        # We require at least $2500 so we have at least $1500 remaining for robust seeds and hiring.
+        if money >= 2500:
+            land_orders.append(["BUY_LAND"])
+            cash_reserve = 600  # keep a higher reserve on the turn we buy land
+
+    # 3. Dynamic hand scaling
+    # Scale hands dynamically up to 10/12 based on the number of active tiles:
+    # - 16 tiles: 6 hands
+    # - 25 tiles (NW): 8 hands
+    # - 50 tiles (NW+NE): 12 hands
+    n_tiles = len(active_tiles)
+    if n_tiles <= 16:
+        target_hands = 6
+    elif n_tiles <= 25:
+        target_hands = 8
+    else:
+        target_hands = 12
+
+    # 4. Generate CropPlan
+    farm = gs.self_farm
+    empty_tiles = [tile for tile in active_tiles if farm.tile(tile[0], tile[1]).empty]
+
+    crops_pool = ["WHEAT", "CARROT", "MELON"]
+    if include_strawberry:
+        crops_pool.append("STRAWBERRY")
+
+    crop_plan = get_crop_plan(gs, empty_tiles, crops_pool=crops_pool)
+
+    return DailyPlan(
+        active_tiles=active_tiles,
+        crop_plan=crop_plan,
+        target_hands=target_hands,
+        land_orders=land_orders,
+        cash_reserve=cash_reserve
+    )
+
 # ===== INLINED: kaggriculture_bot/tasks.py =====
 
 
@@ -662,7 +751,8 @@ def generate_tasks(gs: GameState, managed_tiles: list[tuple[int, int]], crop_pla
     shed_total = sum(gs.private.shed.values())
 
     # Calculate alternative crop profit per day to evaluate opportunity cost of waiting
-    ranking = crop_ranking(day, market_inventory={k: float(v) for k, v in gs.market.inventory.items()})
+    # We pass all CROPS keys to ensure strawberry/tomato and other ongoing crops are included (Stage v040)
+    ranking = crop_ranking(day, market_inventory={k: float(v) for k, v in gs.market.inventory.items()}, crops=list(CROPS.keys()))
     max_alt_profit_per_day = 0.0
     for cname, a in ranking.items():
         if a["feasible"] and a["profit_per_day"] > max_alt_profit_per_day:
@@ -1167,7 +1257,10 @@ def _seed_demand(gs: GameState, tasks: list[Task], crop_plan: dict[tuple[int, in
     return {c: max(0, n - held.get(c, 0)) for c, n in need.items()}
 
 
-def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6, crop_plan: dict[tuple[int, int], str] | None = None) -> list[list]:
+def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
+                       crop_plan: dict[tuple[int, int], str] | None = None,
+                       land_orders: list[list] | None = None,
+                       cash_reserve: int = 400) -> list[list]:
     """Compile optimal market orders, respecting the 10-order limit."""
     market_orders: list[list] = []
     step = gs.step
@@ -1183,8 +1276,14 @@ def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
                 market_orders.append(["SELL", item, qty])
         return market_orders[:MAX_MARKET_ORDERS]
 
-    # 2. Compile HIRE orders via sequential marginal hiring
-    optimal_hires = plan_hires(gs, tasks, max_hands=max_hands_day, cash_reserve=400)
+    # 1.5. Process land orders first (Stage v040)
+    if land_orders:
+        for order in land_orders:
+            market_orders.append(order)
+            money -= 1000.0  # NE cost is 1000
+
+    # 2. Compile HIRE orders via sequential marginal hiring using dynamic cash_reserve
+    optimal_hires = plan_hires(gs, tasks, max_hands=max_hands_day, cash_reserve=cash_reserve)
     for _ in range(optimal_hires):
         market_orders.append(["HIRE"])
 
@@ -1265,12 +1364,9 @@ def hand_count_from_obs(obs) -> int:
 
 
 
-# Promoted nearest_16 compact layout from layout screen
-MANAGED_TILES = [
-    (3, 4), (4, 3), (2, 4), (3, 3), (4, 2), (1, 4), (2, 3), (3, 2),
-    (4, 1), (0, 4), (1, 3), (2, 2), (3, 1), (4, 0), (0, 3), (1, 2)
-]
-TARGET_HANDS_DAY = 6
+# Ablation Flags (settable by the evaluation script)
+INCLUDE_STRAWBERRY = True
+INCLUDE_LAND = True
 
 _EP = {}
 
@@ -1289,22 +1385,24 @@ def core_agent(obs, config=None):
     private = gs.private
     seeds = private.seeds
 
-    # 1. Build a single CropPlan shared by task generation and seed purchasing
-    empty_tiles = []
-    for x, y in MANAGED_TILES:
-        if farm.tile(x, y).empty:
-            empty_tiles.append((x, y))
-    crop_plan = get_crop_plan(gs, empty_tiles)
+    # 1. Compute lightweight DailyPlan (including active tiles, CropPlan, target hands, and land orders)
+    dp = compute_daily_plan(gs, include_strawberry=INCLUDE_STRAWBERRY, include_land=INCLUDE_LAND)
 
-    # 2. Pass CropPlan to task generation
-    tasks = generate_tasks(gs, MANAGED_TILES, crop_plan=crop_plan)
+    # 2. Generate Tasks based on active tiles and CropPlan
+    tasks = generate_tasks(gs, dp.active_tiles, crop_plan=dp.crop_plan)
     assignments = greedy_assign(gs, tasks)
 
     farmer_action = assignments[0].action if assignments else ["PASS"]
     hands_actions = [a.action for a in assignments[1:]]
 
-    # 3. Pass CropPlan to seed purchasing
-    market = plan_market_orders(gs, tasks, max_hands_day=TARGET_HANDS_DAY, crop_plan=crop_plan)
+    # 3. Market orders incorporating land purchases and dynamic cash reserves
+    market = plan_market_orders(
+        gs, tasks,
+        max_hands_day=dp.target_hands,
+        crop_plan=dp.crop_plan,
+        land_orders=dp.land_orders,
+        cash_reserve=dp.cash_reserve
+    )
 
     return safe_action(
         raw_farmer=farmer_action,

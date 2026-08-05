@@ -29,7 +29,7 @@ for c in (ROOT / "src").iterdir():
         break
 _DIR_NAME = SRC.name
 
-INLINE_MODULES = ["constants.py", "safety.py", "state.py", "economy.py", "crop_allocator.py",
+INLINE_MODULES = ["constants.py", "safety.py", "state.py", "economy.py", "crop_allocator.py", "daily_planner.py",
                   "tasks.py", "assignment.py", "hire_manager.py", "policy.py", "harness.py"]
 
 STRIP_PREFIXES = (
@@ -44,6 +44,7 @@ STRIP_PREFIXES = (
     "from .state import",
     "from .economy import",
     "from .crop_allocator import",
+    "from .daily_planner import",
     "from .tasks import",
     "from .assignment import",
     "from .hire_manager import",
