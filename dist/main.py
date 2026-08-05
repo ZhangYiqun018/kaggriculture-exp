@@ -586,6 +586,21 @@ def _harvest_value(gs: GameState, crop: str, units: int) -> float:
     return float(sell_revenue(crop, int(units), inv))
 
 
+def _projected_future_market_inventories(gs: GameState) -> dict[str, float]:
+    """Calculate projected future market inventories for WHEAT, CARROT, and MELON
+    by adding currently growing units on both candidate and opponent fields to current market inventory.
+    """
+    proj = {k: float(v) for k, v in gs.market.inventory.items()}
+    for farm in (gs.self_farm, gs.opponent_farm):
+        for row in farm.tiles:
+            for tile in row:
+                if tile.kind == "PLANT" and tile.crop in CROPS:
+                    crop = tile.crop
+                    cd = CROPS[crop]
+                    proj[crop] = proj.get(crop, 0.0) + expected_yield(crop, cd["max_yield_day"])
+    return proj
+
+
 def generate_tasks(gs: GameState, managed_tiles: list[tuple]) -> list[Task]:
     """Generate candidate tasks for this turn from the parsed game state.
 
@@ -601,7 +616,9 @@ def generate_tasks(gs: GameState, managed_tiles: list[tuple]) -> list[Task]:
     shed_total = sum(gs.private.shed.values())
     unit_inv_total = sum(sum(inv.values()) for inv in gs.private.inventories)
 
-    ranking = crop_ranking(day, market_inventory={k: float(v) for k, v in gs.market.inventory.items()})
+    # 1. Market-aware marginal crop allocation: Rank crops using projected future inventories
+    proj_inv = _projected_future_market_inventories(gs)
+    ranking = crop_ranking(day, market_inventory=proj_inv)
 
     # ---- Tier 4: PLANT empty managed tiles with feasibility + seed budget.
     # NOTE: seeds exchange hands in the *market* phase (after units act), so
@@ -660,15 +677,31 @@ def generate_tasks(gs: GameState, managed_tiles: list[tuple]) -> list[Task]:
 
             # HARVEST task.
             if tile.yield_units > 0 and age >= cd["first_yield_day"]:
-                value = _harvest_value(gs, crop, tile.yield_units)
+                value_now = _harvest_value(gs, crop, tile.yield_units)
+                
+                # 2. Harvest-age optimization: Compare NPV of harvesting now vs at max yield
+                planted_step = tile.planted_day * TURNS_PER_DAY
+                elapsed_steps = max(1, step - planted_step)
+                npv_now = (value_now - cd["seed_cost"]) / elapsed_steps
+                
+                max_age = cd["max_yield_day"]
+                max_yield = expected_yield(crop, max_age)
+                value_max = _harvest_value(gs, crop, max_yield)
+                max_elapsed_steps = max_age * TURNS_PER_DAY
+                npv_max = (value_max - cd["seed_cost"]) / max_elapsed_steps
+                
                 decaying = tile.max_lifespan_step >= 0 and step >= tile.max_lifespan_step
-                terminal_squeeze = day >= 28  # last 2 days: take anything harvestable
+                terminal_squeeze = day >= 28
+                
+                should_harvest = (age >= cd["max_yield_day"]) or decaying or terminal_squeeze or (npv_now > npv_max)
+                
                 tier = TIER_DECAY if (decaying or terminal_squeeze) else (
-                    TIER_HARVEST_HIGH if value >= 100 else TIER_ROUTINE)
+                    (TIER_HARVEST_HIGH if value_now >= 100 else TIER_ROUTINE) if should_harvest else TIER_LOGISTICS
+                )
                 tasks.append(Task(
                     task_id=f"harvest:{x},{y}", kind=TASK_HARVEST, target=(x, y),
                     priority_tier=tier, deadline_step=last_step_today,
-                    expected_value=value, crop=crop,
+                    expected_value=value_now, crop=crop,
                 ))
 
     # ---- Tier 5: DROP if any unit carries items (they vanish to shed at eod;
@@ -999,6 +1032,85 @@ def should_hire(gs: GameState, tasks: list[Task], coordination_penalty: float = 
     """True iff sequential simulation recommends hiring at least 1 hand."""
     return plan_hires(gs, tasks, max_hands=1, coordination_penalty=coordination_penalty, cash_reserve=cash_reserve) > 0
 
+# ===== INLINED: kaggriculture_bot/policy.py =====
+
+
+
+# Crop-specific hold thresholds under which we withhold supply
+# to let the market recover, and chunk sizes to prevent self-glutting.
+CROP_POLICIES = {
+    "MELON":      {"hold_threshold": 120, "chunk_size": 2},
+    "CARROT":     {"hold_threshold": 22,  "chunk_size": 3},
+    "WHEAT":      {"hold_threshold": 12,  "chunk_size": 5},
+    "TOMATO":     {"hold_threshold": 35,  "chunk_size": 2},
+    "STRAWBERRY": {"hold_threshold": 70,  "chunk_size": 2},
+}
+
+
+def _seed_demand(gs: GameState, tasks: list[Task]) -> dict[str, int]:
+    """Calculate seed demand from generated PLANT tasks."""
+    need: dict[str, int] = {}
+    ranking = crop_ranking(gs.day, market_inventory={k: float(v) for k, v in gs.market.inventory.items()})
+    tiles_needing = {t.target for t in tasks if t.kind == TASK_PLANT}
+    for tp in tiles_needing:
+        best_crop, best_profit = None, 0.0
+        for crop, a in ranking.items():
+            if a["feasible"] and a["expected_profit"] > best_profit:
+                best_crop, best_profit = crop, a["expected_profit"]
+        if best_crop:
+            need[best_crop] = need.get(best_crop, 0) + 1
+    held = gs.private.seeds
+    return {c: max(0, n - held.get(c, 0)) for c, n in need.items()}
+
+
+def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6) -> list[list]:
+    """Compile optimal market orders, respecting the 10-order limit."""
+    market_orders: list[list] = []
+    step = gs.step
+    farm = gs.self_farm
+    shed = gs.private.shed
+    money = farm.money
+
+    # 1. Terminal liquidation check (step >= 718)
+    # Sell ALL inventory unconditionally.
+    if step >= LAST_STEP:
+        for item, qty in sorted(shed.items()):
+            if qty > 0:
+                market_orders.append(["SELL", item, qty])
+        return market_orders[:MAX_MARKET_ORDERS]
+
+    # 2. Compile HIRE orders via sequential marginal hiring
+    optimal_hires = plan_hires(gs, tasks, max_hands=max_hands_day, cash_reserve=400)
+    for _ in range(optimal_hires):
+        market_orders.append(["HIRE"])
+
+    # 3. Quantity-aware chunked selling
+    for item in sorted(shed.keys()):
+        qty = shed[item]
+        if qty <= 0:
+            continue
+            
+        policy = CROP_POLICIES.get(item, {"hold_threshold": 1, "chunk_size": 100})
+        curr_price = gs.market.prices.get(item, 1)
+        
+        # Hold threshold check: keep supply if price is too low
+        if curr_price < policy["hold_threshold"]:
+            continue
+            
+        # Sell in small controlled chunks to avoid self-crashing the price
+        chunk = min(qty, policy["chunk_size"])
+        if chunk > 0:
+            market_orders.append(["SELL", item, chunk])
+
+    # 4. Restock seeds
+    for crop, n in _seed_demand(gs, tasks).items():
+        if n > 0 and money >= CROPS[crop]["seed_cost"] * n:
+            market_orders.append(["BUY_SEED", crop, n])
+            # approximate remaining money
+            money -= CROPS[crop]["seed_cost"] * n
+
+    return market_orders[:MAX_MARKET_ORDERS]
+
 # ===== INLINED: kaggriculture_bot/harness.py =====
 
 import traceback
@@ -1049,26 +1161,13 @@ def hand_count_from_obs(obs) -> int:
 
 
 
-# Layout definitions
-LAYOUTS = {
-    "current_16": [
-        (2, 2), (3, 2), (4, 2), (2, 3), (3, 3), (4, 3),
-        (2, 4), (3, 4), (1, 2), (1, 3), (1, 1), (2, 1), (3, 1), (0, 0), (1, 0), (0, 1),
-    ],
-    "nearest_16": [
-        (3, 4), (4, 3), (2, 4), (3, 3), (4, 2), (1, 4), (2, 3), (3, 2),
-        (4, 1), (0, 4), (1, 3), (2, 2), (3, 1), (4, 0), (0, 3), (1, 2)
-    ],
-    "compact_24": [
-        (x, y) for y in range(5) for x in range(5) if (x, y) != (4, 4)
-    ]
-}
-
-# Settable via evaluation script patching
-LAYOUT_MODE = "nearest_16"
-MANAGED_TILES = LAYOUTS[LAYOUT_MODE]
-
+# Promoted nearest_16 compact layout from layout screen (highest cash, lowest weeds)
+MANAGED_TILES = [
+    (3, 4), (4, 3), (2, 4), (3, 3), (4, 2), (1, 4), (2, 3), (3, 2),
+    (4, 1), (0, 4), (1, 3), (2, 2), (3, 1), (4, 0), (0, 3), (1, 2)
+]
 TARGET_HANDS_DAY = 6
+
 _EP = {}
 
 
@@ -1077,60 +1176,23 @@ def _reset_episode_state():
     _EP = {}
 
 
-def _seed_demand(gs, tasks) -> dict:
-    need: dict = {}
-    ranking = crop_ranking(gs.day, market_inventory={k: float(v) for k, v in gs.market.inventory.items()})
-    tiles_needing = {t.target for t in tasks if t.kind == TASK_PLANT}
-    for tp in tiles_needing:
-        best_crop, best_profit = None, 0.0
-        for crop, a in ranking.items():
-            if a["feasible"] and a["expected_profit"] > best_profit:
-                best_crop, best_profit = crop, a["expected_profit"]
-        if best_crop:
-            need[best_crop] = need.get(best_crop, 0) + 1
-    held = gs.private.seeds
-    return {c: max(0, n - held.get(c, 0)) for c, n in need.items()}
-
-
 def core_agent(obs, config=None):
-    # Dynamically bind the current selected layout on execution
-    tiles = LAYOUTS[LAYOUT_MODE]
-    
     gs = parse_state(obs)
     if gs.step == 0:
         _reset_episode_state()
 
     farm = gs.self_farm
     private = gs.private
-    shed = private.shed
     seeds = private.seeds
 
-    tasks = generate_tasks(gs, tiles)
+    tasks = generate_tasks(gs, MANAGED_TILES)
     assignments = greedy_assign(gs, tasks)
 
     farmer_action = assignments[0].action if assignments else ["PASS"]
     hands_actions = [a.action for a in assignments[1:]]
 
-    market = []
-    for item in ("WHEAT", "CARROT", "TOMATO", "STRAWBERRY", "MELON",
-                 "EGG", "MILK", "WOOL", "FERTILIZER"):
-        n = shed.get(item, 0)
-        if n > 0:
-            market.append(["SELL", item, n])
-
-    # HIRE: True sequential marginal hiring with diminishing returns (Phase 3R.5).
-    optimal_hires = plan_hires(gs, tasks, max_hands=TARGET_HANDS_DAY, cash_reserve=400)
-    for _ in range(optimal_hires):
-        if len(market) >= 10:
-            break
-        market.append(["HIRE"])
-
-    for crop, n in _seed_demand(gs, tasks).items():
-        if len(market) >= 10:
-            break
-        if n > 0 and farm.money >= CROPS[crop]["seed_cost"] * n:
-            market.append(["BUY_SEED", crop, n])
-    market = market[:10]
+    # True sequential hiring + quantity-aware selling + terminal liquidation
+    market = plan_market_orders(gs, tasks, max_hands_day=TARGET_HANDS_DAY)
 
     return safe_action(
         raw_farmer=farmer_action,

@@ -52,6 +52,21 @@ def _harvest_value(gs: GameState, crop: str, units: int) -> float:
     return float(sell_revenue(crop, int(units), inv))
 
 
+def _projected_future_market_inventories(gs: GameState) -> dict[str, float]:
+    """Calculate projected future market inventories for WHEAT, CARROT, and MELON
+    by adding currently growing units on both candidate and opponent fields to current market inventory.
+    """
+    proj = {k: float(v) for k, v in gs.market.inventory.items()}
+    for farm in (gs.self_farm, gs.opponent_farm):
+        for row in farm.tiles:
+            for tile in row:
+                if tile.kind == "PLANT" and tile.crop in CROPS:
+                    crop = tile.crop
+                    cd = CROPS[crop]
+                    proj[crop] = proj.get(crop, 0.0) + expected_yield(crop, cd["max_yield_day"])
+    return proj
+
+
 def generate_tasks(gs: GameState, managed_tiles: list[tuple]) -> list[Task]:
     """Generate candidate tasks for this turn from the parsed game state.
 
@@ -67,7 +82,9 @@ def generate_tasks(gs: GameState, managed_tiles: list[tuple]) -> list[Task]:
     shed_total = sum(gs.private.shed.values())
     unit_inv_total = sum(sum(inv.values()) for inv in gs.private.inventories)
 
-    ranking = crop_ranking(day, market_inventory={k: float(v) for k, v in gs.market.inventory.items()})
+    # 1. Market-aware marginal crop allocation: Rank crops using projected future inventories
+    proj_inv = _projected_future_market_inventories(gs)
+    ranking = crop_ranking(day, market_inventory=proj_inv)
 
     # ---- Tier 4: PLANT empty managed tiles with feasibility + seed budget.
     # NOTE: seeds exchange hands in the *market* phase (after units act), so
@@ -126,15 +143,31 @@ def generate_tasks(gs: GameState, managed_tiles: list[tuple]) -> list[Task]:
 
             # HARVEST task.
             if tile.yield_units > 0 and age >= cd["first_yield_day"]:
-                value = _harvest_value(gs, crop, tile.yield_units)
+                value_now = _harvest_value(gs, crop, tile.yield_units)
+                
+                # 2. Harvest-age optimization: Compare NPV of harvesting now vs at max yield
+                planted_step = tile.planted_day * TURNS_PER_DAY
+                elapsed_steps = max(1, step - planted_step)
+                npv_now = (value_now - cd["seed_cost"]) / elapsed_steps
+                
+                max_age = cd["max_yield_day"]
+                max_yield = expected_yield(crop, max_age)
+                value_max = _harvest_value(gs, crop, max_yield)
+                max_elapsed_steps = max_age * TURNS_PER_DAY
+                npv_max = (value_max - cd["seed_cost"]) / max_elapsed_steps
+                
                 decaying = tile.max_lifespan_step >= 0 and step >= tile.max_lifespan_step
-                terminal_squeeze = day >= 28  # last 2 days: take anything harvestable
+                terminal_squeeze = day >= 28
+                
+                should_harvest = (age >= cd["max_yield_day"]) or decaying or terminal_squeeze or (npv_now > npv_max)
+                
                 tier = TIER_DECAY if (decaying or terminal_squeeze) else (
-                    TIER_HARVEST_HIGH if value >= 100 else TIER_ROUTINE)
+                    (TIER_HARVEST_HIGH if value_now >= 100 else TIER_ROUTINE) if should_harvest else TIER_LOGISTICS
+                )
                 tasks.append(Task(
                     task_id=f"harvest:{x},{y}", kind=TASK_HARVEST, target=(x, y),
                     priority_tier=tier, deadline_step=last_step_today,
-                    expected_value=value, crop=crop,
+                    expected_value=value_now, crop=crop,
                 ))
 
     # ---- Tier 5: DROP if any unit carries items (they vanish to shed at eod;

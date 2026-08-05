@@ -30,7 +30,7 @@ for c in (ROOT / "src").iterdir():
 _DIR_NAME = SRC.name
 
 INLINE_MODULES = ["constants.py", "safety.py", "state.py", "economy.py",
-                  "tasks.py", "assignment.py", "hire_manager.py", "harness.py"]
+                  "tasks.py", "assignment.py", "hire_manager.py", "policy.py", "harness.py"]
 
 STRIP_PREFIXES = (
     "from __future__ import",
@@ -46,6 +46,7 @@ STRIP_PREFIXES = (
     "from .tasks import",
     "from .assignment import",
     "from .hire_manager import",
+    "from .policy import",
     "from .harness import",
     f"from {_DIR_NAME}",
     f"from {_DIR_NAME}.",

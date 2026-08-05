@@ -1,9 +1,9 @@
 {
   "agent_version": "champion",
   "source_path": "agents/champion/main.py",
-  "git_sha": "e889289bd1418399c2f92945d942f559bc2c3b81",
-  "source_sha256": "db5b6a97a347eb97d458dae006fa821851286a040f8d88af8324a5034a717dd2",
-  "artifact_sha256": "36140a505c10c9be6698d10e4f0dd35e2f28d4874de9db0b932d65730573498d",
+  "git_sha": "c13ec6cba412d91be2a84ead5659fd2b38ce2c36",
+  "source_sha256": "34ab0b72e518f44bcd9c68366031ae67ed7b2b61fdbf1e299a85a71f3d714ec1",
+  "artifact_sha256": "62db1c61d7bf50f750eb68c94fd893d184f8a2d823f45e6ac7e2b9ff77281584",
   "artifact_path": "dist/main.py",
   "environment_name": "kaggriculture",
   "environment_version": "1.32.3"
