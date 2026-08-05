@@ -25,8 +25,15 @@ CROP_POLICIES = {
 }
 
 
-def _seed_demand(gs: GameState, tasks: list[Task]) -> dict[str, int]:
-    """Calculate seed demand from generated PLANT tasks."""
+def _seed_demand(gs: GameState, tasks: list[Task], crop_plan: dict[tuple[int, int], str] | None = None) -> dict[str, int]:
+    """Calculate seed demand from generated CropPlan if available, otherwise fallback to tasks."""
+    if crop_plan is not None:
+        need: dict[str, int] = {}
+        for crop in crop_plan.values():
+            need[crop] = need.get(crop, 0) + 1
+        held = gs.private.seeds
+        return {c: max(0, n - held.get(c, 0)) for c, n in need.items()}
+
     need: dict[str, int] = {}
     ranking = crop_ranking(gs.day, market_inventory={k: float(v) for k, v in gs.market.inventory.items()})
     tiles_needing = {t.target for t in tasks if t.kind == TASK_PLANT}
@@ -41,7 +48,7 @@ def _seed_demand(gs: GameState, tasks: list[Task]) -> dict[str, int]:
     return {c: max(0, n - held.get(c, 0)) for c, n in need.items()}
 
 
-def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6) -> list[list]:
+def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6, crop_plan: dict[tuple[int, int], str] | None = None) -> list[list]:
     """Compile optimal market orders, respecting the 10-order limit."""
     market_orders: list[list] = []
     step = gs.step
@@ -81,7 +88,7 @@ def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6)
             market_orders.append(["SELL", item, chunk])
 
     # 4. Restock seeds
-    for crop, n in _seed_demand(gs, tasks).items():
+    for crop, n in _seed_demand(gs, tasks, crop_plan).items():
         if n > 0 and money >= CROPS[crop]["seed_cost"] * n:
             market_orders.append(["BUY_SEED", crop, n])
             # approximate remaining money

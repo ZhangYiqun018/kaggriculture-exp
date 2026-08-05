@@ -23,7 +23,7 @@ def _gs_after(agent_fn, steps, seed=1):
 
 def _buy_seeds_obs(obs, config=None):
     if obs.get("step", 0) == 0:
-        return {"farmer": ["PASS"], "hands": [], "market": [["BUY_SEED", "WHEAT", 6], ["BUY_SEED", "CARROT", 2]]}
+        return {"farmer": ["PASS"], "hands": [], "market": [["BUY_SEED", "WHEAT", 6], ["BUY_SEED", "CARROT", 2], ["BUY_SEED", "MELON", 2]]}
     return {"farmer": ["PASS"], "hands": [], "market": []}
 
 

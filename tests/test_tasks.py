@@ -38,7 +38,7 @@ def test_empty_farm_generates_plant_tasks():
     gs = _gs_after(_pass_agent, 3)
     ts = T.generate_tasks(gs, MANAGED)
     plants = [t for t in ts if t.kind == T.TASK_PLANT]
-    assert len(plants) == len(MANAGED) * 3  # 3 crops (WHEAT/CARROT/MELON) per tile at day 0
+    assert len(plants) == len(MANAGED)  # exactly 1 crop planned per tile under v031 consistent allocation
     assert all(t.priority_tier == T.TIER_PLANT for t in plants)
     assert all(t.deadline_step == 23 for t in plants)  # end of day 0
 

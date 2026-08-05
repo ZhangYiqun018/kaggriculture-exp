@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from kaggriculture_bot.constants import TURNS_PER_DAY
+from kaggriculture_bot.economy import sell_revenue
 
 
 def outcome_score(candidate_reward: float, opponent_reward: float) -> float:
@@ -51,6 +52,7 @@ def extract_match_metrics(env, candidate_idx: int) -> dict:
     dig_count = 0
     
     market_types: dict[str, int] = {"HIRE": 0, "BUY_SEED": 0, "BUY_PRODUCT": 0, "SELL": 0, "BUY_LAND": 0}
+    product_revenues: dict[str, float] = {"WHEAT": 0.0, "CARROT": 0.0, "TOMATO": 0.0, "STRAWBERRY": 0.0, "MELON": 0.0, "EGG": 0.0, "MILK": 0.0, "WOOL": 0.0, "FERTILIZER": 0.0}
     plant_blocked_count = 0
     target_conflicts = 0  # assigned targets overlapping in same step
     weeds_at_end = 0
@@ -133,6 +135,19 @@ def extract_match_metrics(env, candidate_idx: int) -> dict:
                     market_types[op] += 1
                 elif op == "BUY_SEED":
                     market_types["BUY_SEED"] += 1
+                
+                # Extract and aggregate transacted revenue per product
+                if op == "SELL" and len(mo) >= 3:
+                    item = mo[1]
+                    try:
+                        qty = int(mo[2])
+                    except (ValueError, TypeError):
+                        qty = 0
+                    if item in product_revenues and qty > 0:
+                        m_inv = obs.get("market", {}).get("inventory", {})
+                        inv_before = m_inv.get(item, 10000)
+                        rev = sell_revenue(item, qty, inv_before)
+                        product_revenues[item] += float(rev)
 
     # End-of-episode observation stats
     final_obs = steps[-1][candidate_idx].get("observation", {})
@@ -179,6 +194,11 @@ def extract_match_metrics(env, candidate_idx: int) -> dict:
         "weeds_at_end": weeds_at_end,
         "target_conflicts": target_conflicts,
         
+        # Repaired terminal details (Stage v031)
+        "terminal_shed_inventory": dict(final_obs.get("private", {}).get("shed", {})),
+        "terminal_carry_inventory": [dict(inv) for inv in final_obs.get("private", {}).get("inventories", [])],
+        "product_revenues": product_revenues,
+        
         # True fail-loud observability
         "exception": statuses[candidate_idx] not in ("DONE",),
         "has_stderr": has_stderr,
@@ -215,6 +235,13 @@ def aggregate_metrics(matches: list[dict]) -> dict:
         for k, v in types.items():
             market_types[k] = market_types.get(k, 0) + v
 
+    # Aggregate product revenues
+    avg_revenues = {"WHEAT": 0.0, "CARROT": 0.0, "TOMATO": 0.0, "STRAWBERRY": 0.0, "MELON": 0.0, "EGG": 0.0, "MILK": 0.0, "WOOL": 0.0, "FERTILIZER": 0.0}
+    for m in matches:
+        revs = m.get("product_revenues", {})
+        for k, v in revs.items():
+            avg_revenues[k] += v / n
+
     return {
         "n": n,
         "wins": wins,
@@ -237,6 +264,7 @@ def aggregate_metrics(matches: list[dict]) -> dict:
         "market_order_types": market_types,
         "avg_weeds_at_end": round(sum(m.get("weeds_at_end", 0) for m in matches) / n, 2),
         "p99_latency_max": round(max(m.get("p99_latency", 0.0) for m in matches), 4),
+        "avg_product_revenues": {k: round(v, 2) for k, v in avg_revenues.items()},
     }
 
 

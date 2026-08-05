@@ -1,10 +1,9 @@
 """Task generation: candidate tasks from GameState. Pure functions.
 
-No if/elif rule dispatch — the caller scores tasks and assigns them.
+Decisions are tier-disciplined.
 
-Tier discipline (never flattened into a single score):
-  0: dies tonight if skipped (unwatered plant at consecutive_unwatered>=1, i.e.
-     planted today or missed water yesterday)
+Tiers:
+  0: dies tonight if skipped
   1: decaying mature crop / terminal liquidation deadline
   2: high-value HARVEST
   3: routine WATER / HARVEST / DIG
@@ -17,6 +16,7 @@ from dataclasses import dataclass
 from .constants import CROPS, TURNS_PER_DAY, EPISODE_STEPS, MARKET_I0
 from .economy import sell_revenue, expected_yield, crop_ranking
 from .state import GameState
+from .crop_allocator import get_crop_plan
 
 TIER_DYING = 0
 TIER_DECAY = 1
@@ -32,16 +32,18 @@ TASK_DIG = "DIG"
 TASK_DROP = "DROP"
 TASK_PASS = "PASS"
 
+SHED_ACCESS_TILES = [(4, 4), (4, 5), (5, 4), (5, 5)]
+
 
 @dataclass(frozen=True)
 class Task:
     task_id: str
     kind: str
-    target: tuple | None
+    target: tuple[int, int] | None
     priority_tier: int
     deadline_step: int
     expected_value: float
-    travel_cost: float = 0.0      # filled by assignment (per unit)
+    travel_cost: float = 0.0      # filled by assignment
     opportunity_cost: float = 0.0  # filled by assignment
     required_item: str | None = None
     crop: str | None = None
@@ -52,59 +54,67 @@ def _harvest_value(gs: GameState, crop: str, units: int) -> float:
     return float(sell_revenue(crop, int(units), inv))
 
 
-def _projected_future_market_inventories(gs: GameState) -> dict[str, float]:
-    """Calculate projected future market inventories for WHEAT, CARROT, and MELON
-    by adding currently growing units on both candidate and opponent fields to current market inventory.
-    """
-    proj = {k: float(v) for k, v in gs.market.inventory.items()}
-    for farm in (gs.self_farm, gs.opponent_farm):
-        for row in farm.tiles:
-            for tile in row:
-                if tile.kind == "PLANT" and tile.crop in CROPS:
-                    crop = tile.crop
-                    cd = CROPS[crop]
-                    proj[crop] = proj.get(crop, 0.0) + expected_yield(crop, cd["max_yield_day"])
-    return proj
-
-
-def generate_tasks(gs: GameState, managed_tiles: list[tuple]) -> list[Task]:
-    """Generate candidate tasks for this turn from the parsed game state.
-
-    managed_tiles: the work block this controller operates on (policy input,
-    NOT derived here). Tasks target positions; which unit takes them is the
-    assignment layer's problem.
-    """
+def generate_tasks(gs: GameState, managed_tiles: list[tuple[int, int]], crop_plan: dict[tuple[int, int], str] | None = None) -> list[Task]:
+    """Generate candidate tasks for this turn from the parsed game state."""
     tasks: list[Task] = []
     day, step = gs.day, gs.step
     last_step_today = (day + 1) * TURNS_PER_DAY - 1
     farm = gs.self_farm
-    seeds = gs.private.seeds
     shed_total = sum(gs.private.shed.values())
-    unit_inv_total = sum(sum(inv.values()) for inv in gs.private.inventories)
 
-    # 1. Market-aware marginal crop allocation: Rank crops using projected future inventories
-    proj_inv = _projected_future_market_inventories(gs)
-    ranking = crop_ranking(day, market_inventory=proj_inv)
+    # Calculate alternative crop profit per day to evaluate opportunity cost of waiting
+    ranking = crop_ranking(day, market_inventory={k: float(v) for k, v in gs.market.inventory.items()})
+    max_alt_profit_per_day = 0.0
+    for cname, a in ranking.items():
+        if a["feasible"] and a["profit_per_day"] > max_alt_profit_per_day:
+            max_alt_profit_per_day = a["profit_per_day"]
+    if max_alt_profit_per_day <= 0:
+        max_alt_profit_per_day = 25.0  # standard baseline profit per day
 
-    # ---- Tier 4: PLANT empty managed tiles with feasibility + seed budget.
-    # NOTE: seeds exchange hands in the *market* phase (after units act), so
-    # only seeds already held can be planted this turn (contract §3.8).
-    for i, (x, y) in enumerate(managed_tiles):
-        tile = farm.tile(x, y)
-        if not tile.empty:
-            continue
-        for crop, a in ranking.items():
-            if not a["feasible"] or a["expected_profit"] <= 0:
-                continue
-            tasks.append(Task(
-                task_id=f"plant:{crop}:{x},{y}",
-                kind=TASK_PLANT, target=(x, y),
-                priority_tier=TIER_PLANT,
-                deadline_step=last_step_today,  # new plants must be watered today
-                expected_value=float(a["expected_profit"]),
-                required_item=f"seed:{crop}",
-                crop=crop,
-            ))
+    # --- Day 29 Terminal Mode (step >= 696)
+    # Stop planting, watering, and digging entirely. Only harvest and drop carried goods.
+    if day >= 29:
+        # Generate HARVEST tasks for any crops with yield
+        for y in range(farm.tiles.__len__()):
+            for x in range(farm.tiles[y].__len__()):
+                tile = farm.tiles[y][x]
+                if tile.kind == "PLANT" and tile.yield_units > 0:
+                    crop = tile.crop
+                    if crop is None or crop not in CROPS:
+                        continue
+                    value_now = _harvest_value(gs, crop, tile.yield_units)
+                    tasks.append(Task(
+                        task_id=f"harvest:{x},{y}", kind=TASK_HARVEST, target=(x, y),
+                        priority_tier=TIER_DECAY, deadline_step=last_step_today,
+                        expected_value=value_now, crop=crop,
+                    ))
+                    
+        # Generate target-specific return/drop tasks per carrying unit
+        _generate_unit_drop_tasks(gs, tasks, last_step_today)
+        return tasks
+
+    # ---- Tier 4: PLANT empty managed tiles using the shared CropPlan
+    # We generate empty tiles list
+    empty_tiles = []
+    for x, y in managed_tiles:
+        if farm.tile(x, y).empty:
+            empty_tiles.append((x, y))
+
+    if crop_plan is None:
+        crop_plan = get_crop_plan(gs, empty_tiles)
+
+    # Emit exactly one PLANT intent per tile
+    for (x, y), crop in crop_plan.items():
+        cd = CROPS[crop]
+        tasks.append(Task(
+            task_id=f"plant:{crop}:{x},{y}",
+            kind=TASK_PLANT, target=(x, y),
+            priority_tier=TIER_PLANT,
+            deadline_step=last_step_today,
+            expected_value=float(ranking[crop]["expected_profit"]),
+            required_item=f"seed:{crop}",
+            crop=crop,
+        ))
 
     # ---- Plant tiles: WATER / HARVEST / decay.
     for y in range(farm.tiles.__len__()):
@@ -145,45 +155,67 @@ def generate_tasks(gs: GameState, managed_tiles: list[tuple]) -> list[Task]:
             if tile.yield_units > 0 and age >= cd["first_yield_day"]:
                 value_now = _harvest_value(gs, crop, tile.yield_units)
                 
-                # 2. Harvest-age optimization: Compare NPV of harvesting now vs at max yield
-                planted_step = tile.planted_day * TURNS_PER_DAY
-                elapsed_steps = max(1, step - planted_step)
-                npv_now = (value_now - cd["seed_cost"]) / elapsed_steps
-                
+                # 6. Replace sunk-cost average NPV with incremental harvest-now vs wait value.
                 max_age = cd["max_yield_day"]
                 max_yield = expected_yield(crop, max_age)
                 value_max = _harvest_value(gs, crop, max_yield)
-                max_elapsed_steps = max_age * TURNS_PER_DAY
-                npv_max = (value_max - cd["seed_cost"]) / max_elapsed_steps
+                
+                extra_days_to_wait = max(1, max_age - age)
+                opportunity_cost = max_alt_profit_per_day * extra_days_to_wait
                 
                 decaying = tile.max_lifespan_step >= 0 and step >= tile.max_lifespan_step
                 terminal_squeeze = day >= 28
                 
-                should_harvest = (age >= cd["max_yield_day"]) or decaying or terminal_squeeze or (npv_now > npv_max)
+                # If value of harvesting now + alternative profit > waiting for max yield, we harvest now.
+                should_harvest = (age >= max_age) or decaying or terminal_squeeze or (value_now + opportunity_cost >= value_max)
                 
-                tier = TIER_DECAY if (decaying or terminal_squeeze) else (
-                    (TIER_HARVEST_HIGH if value_now >= 100 else TIER_ROUTINE) if should_harvest else TIER_LOGISTICS
-                )
-                tasks.append(Task(
-                    task_id=f"harvest:{x},{y}", kind=TASK_HARVEST, target=(x, y),
-                    priority_tier=tier, deadline_step=last_step_today,
-                    expected_value=value_now, crop=crop,
-                ))
+                # 5. Do not emit HARVEST tasks when should_harvest is false.
+                if should_harvest:
+                    tier = TIER_DECAY if (decaying or terminal_squeeze) else (
+                        TIER_HARVEST_HIGH if value_now >= 100 else TIER_ROUTINE)
+                    tasks.append(Task(
+                        task_id=f"harvest:{x},{y}", kind=TASK_HARVEST, target=(x, y),
+                        priority_tier=tier, deadline_step=last_step_today,
+                        expected_value=value_now, crop=crop,
+                    ))
 
-    # ---- Tier 5: DROP if any unit carries items (they vanish to shed at eod;
-    # kepping them risks overflow loss). DROP must happen while shed-adjacent.
-    if unit_inv_total > 0:
-        # Check shed headroom: if the shed is already full, DROP is a no-op and
-        # inventory will be LOST at eod — flag as Tier 1 so we prefer selling instead.
-        headroom = max(0, 100 - shed_total)
-        tier = TIER_DECAY if headroom < unit_inv_total else TIER_LOGISTICS
-        tasks.append(Task(
-            task_id="drop:shed", kind=TASK_DROP, target=None,
-            priority_tier=tier, deadline_step=last_step_today,
-            expected_value=float(unit_inv_total),  # rough: units proxied as value
-        ))
+    # ---- Tier 5: DROP target-specific return/drop tasks per carrying unit
+    _generate_unit_drop_tasks(gs, tasks, last_step_today)
 
     return tasks
+
+
+def _generate_unit_drop_tasks(gs: GameState, tasks: list[Task], last_step_today: int):
+    """Generates one return/drop task per carrying unit and distributes them
+    among all four shed-access tiles.
+    """
+    farm = gs.self_farm
+    unit_positions = [farm.farmer] + list(farm.hands)
+    unit_inventories = gs.private.inventories
+
+    for i in range(len(unit_positions)):
+        if i >= len(unit_inventories):
+            continue
+        inv = unit_inventories[i]
+        qty = sum(inv.values())
+        if qty > 0:
+            pos = unit_positions[i]
+            # Find the closest of the 4 shed-access tiles
+            best_tile = (4, 4)
+            best_dist = 1000
+            for sx, sy in SHED_ACCESS_TILES:
+                d = abs(pos[0] - sx) + abs(pos[1] - sy)
+                if d < best_dist:
+                    best_dist = d
+                    best_tile = (sx, sy)
+            
+            # Create a target-specific DROP task for this unit
+            tasks.append(Task(
+                task_id=f"drop:unit:{i}", kind=TASK_DROP, target=best_tile,
+                priority_tier=TIER_DECAY if gs.day >= 29 else TIER_LOGISTICS,
+                deadline_step=last_step_today,
+                expected_value=float(qty),
+            ))
 
 
 def top_tasks(tasks: list[Task], n: int = 10) -> list[Task]:
