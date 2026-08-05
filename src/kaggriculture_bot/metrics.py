@@ -205,6 +205,8 @@ def aggregate_metrics(matches: list[dict]) -> dict:
     # Repaired aggregations
     avg_move_ratio = sum(m.get("movement_action_ratio", 0.0) for m in matches) / n
     avg_pass_ratio = sum(m.get("pass_ratio", 0.0) for m in matches) / n
+    avg_cand_money = sum(m.get("candidate_final_money", 0.0) for m in matches) / n
+    avg_opp_money = sum(m.get("opponent_final_money", 0.0) for m in matches) / n
     
     total_market = sum(m.get("market_order_count", 0) for m in matches)
     market_types = {"HIRE": 0, "BUY_SEED": 0, "BUY_PRODUCT": 0, "SELL": 0, "BUY_LAND": 0}
@@ -220,6 +222,8 @@ def aggregate_metrics(matches: list[dict]) -> dict:
         "losses": losses,
         "avg_outcome": round(avg_outcome, 4),
         "wilson_lower_95": round(wilson_lower_bound(wins, n), 4),
+        "avg_candidate_money": round(avg_cand_money, 2),
+        "avg_opponent_money": round(avg_opp_money, 2),
         "avg_money_margin": round(sum(margins) / n, 2),
         "min_candidate_money": round(min(m["candidate_final_money"] for m in matches), 2),
         "exception_count": sum(1 for m in matches if m.get("exception") or m.get("has_stderr")),

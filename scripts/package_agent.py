@@ -56,6 +56,8 @@ from __future__ import annotations
 from typing import Any
 from dataclasses import dataclass, field
 import math
+import os
+import traceback
 '''
 
 
@@ -137,7 +139,7 @@ def write_manifest(agent_path: Path, output: Path, agent_version: str) -> Path:
         "source_sha256": sha256(agent_path),
         "artifact_sha256": sha256(output),
         "artifact_path": str(output.relative_to(ROOT)),
-        "environment_name": "kaggressriculture",
+        "environment_name": "kaggriculture",
         "environment_version": _env_version(),
     }
     mp = output.parent / "manifest.json"

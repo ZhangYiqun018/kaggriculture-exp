@@ -34,16 +34,15 @@ def _spawn_pos(gs: GameState) -> tuple[int, int]:
 
 
 def _day_completion_value(gs: GameState, tasks: list[Task], start_positions: list[tuple[int, int]],
-                          hours_left_for_hands: int, hours_left_for_current_units: int) -> float:
+                          n_existing: int, hours_left_for_hands: int, hours_left_for_current_units: int) -> float:
     """Greedy same-day simulation.
 
     Different free-hour starting points:
-    - current units (farmer + already hired hands) start working CURRENT hour (hours_left_for_current_units)
-    - newly hired hands start working NEXT hour (hours_left_for_hands)
+    - current units (farmer + already hired hands) start working CURRENT hour (available_at=0)
+    - newly hired hands start working NEXT hour (available_at=1)
     """
     # Exclude mutually exclusive tasks at the same coordinates.
     # We only take the HIGHEST profit task per tile position in the simulation.
-    filtered_tasks = []
     best_on_tile: dict[tuple, Task] = {}
     for t in tasks:
         if t.target is not None:
@@ -54,10 +53,12 @@ def _day_completion_value(gs: GameState, tasks: list[Task], start_positions: lis
 
     ordered = sorted(filtered_tasks, key=lambda t: (t.priority_tier, -t.expected_value))
     
-    # Initialize timeline: new hands (last elements) are delayed.
-    free_at = [0] * len(start_positions)
-    for i in range(len(start_positions)):
-        pass
+    # 4. Fix hire_manager new-hand availability:
+    # - existing units available_at = 0
+    # - every hand planned this turn available_at = 1
+    # - actually use availability in finish-time computation.
+    available_at = [0] * n_existing + [1] * (len(start_positions) - n_existing)
+    free_at = list(available_at)
         
     pos = list(start_positions)
     total = 0.0
@@ -70,8 +71,7 @@ def _day_completion_value(gs: GameState, tasks: list[Task], start_positions: lis
         best_i, best_finish = -1, 1_000_000
         for i in range(len(pos)):
             d = abs(pos[i][0] - tgt[0]) + abs(pos[i][1] - tgt[1])
-            # Delay start step for new hands (their free_at starts at 1, meaning next turn)
-            start_offset = 1 if i >= len(start_positions) - 1 else 0  # mock index guard, handled in loop
+            # Use availability in finish-time computation: max(free_at[i], available_at[i]) is already free_at[i]
             finish = free_at[i] + d + 1
             if finish < best_finish:
                 best_i, best_finish = i, finish
@@ -80,11 +80,11 @@ def _day_completion_value(gs: GameState, tasks: list[Task], start_positions: lis
             continue
             
         # Limit reachability check based on role
-        limit = hours_left_for_hands if best_i >= len(start_positions) - 1 else hours_left_for_current_units
+        limit = hours_left_for_hands if best_i >= n_existing else hours_left_for_current_units
         if best_finish <= limit:
             total += t.expected_value
             free_at[best_i] = best_finish
-            pos[best_i] = t.target
+            pos[best_i] = tgt
             
     return total
 
@@ -107,6 +107,7 @@ def plan_hires(gs: GameState, tasks: list[Task], max_hands: int = 6,
     current_money = farm.money
     current_hires_today = farm.hires_today
     current_hands_count = farm.hand_count
+    n_existing = 1 + current_hands_count
 
     # Positions pool for simulation
     unit_positions = [farm.farmer] + list(farm.hands)
@@ -118,14 +119,14 @@ def plan_hires(gs: GameState, tasks: list[Task], max_hands: int = 6,
 
         # Calculate base value with current simulation group
         base_val = _day_completion_value(
-            gs, tasks, unit_positions,
+            gs, tasks, unit_positions, n_existing,
             hours_left_hands, hours_left_current
         )
 
         # Append one phantom hand at spawn
         phantom_positions = unit_positions + [_spawn_pos(gs)]
         with_hand_val = _day_completion_value(
-            gs, tasks, phantom_positions,
+            gs, tasks, phantom_positions, n_existing,
             hours_left_hands, hours_left_current
         )
 

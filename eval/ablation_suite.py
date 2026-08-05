@@ -42,16 +42,18 @@ def create_ablation_agent(variant: str):
     if variant == "A":
         mod.MANAGED_TILES = [(2, 2), (3, 2), (2, 3), (3, 3), (4, 3), (3, 4)]
         mod.TARGET_HANDS_DAY = 0
+        mod.plan_hires = lambda *args, **kwargs: 0
     elif variant == "B":
         mod.TARGET_HANDS_DAY = 0
+        mod.plan_hires = lambda *args, **kwargs: 0
     elif variant == "C":
         mod.MANAGED_TILES = [(2, 2), (3, 2), (2, 3), (3, 3), (4, 3), (3, 4)]
         mod.TARGET_HANDS_DAY = 6
-        # To make it "fixed 6 hands", we patch should_hire to always return True (until cap)
-        mod.should_hire = lambda *args, **kwargs: True
+        # To make it "fixed 6 hands", we patch plan_hires to return max(0, 6 - current_hands)
+        mod.plan_hires = lambda gs, tasks, max_hands=6, **kwargs: max(0, max_hands - gs.self_farm.hand_count)
     elif variant == "D":
         mod.TARGET_HANDS_DAY = 6
-        mod.should_hire = lambda *args, **kwargs: True
+        mod.plan_hires = lambda gs, tasks, max_hands=6, **kwargs: max(0, max_hands - gs.self_farm.hand_count)
     elif variant == "E":
         # Uses the default (16 tiles + true sequential plan_hires)
         pass
@@ -101,7 +103,7 @@ def write_reports(results: dict):
         "# Phase 3R.6: Causal Factorial Ablation Report\n",
         "Evaluated on 8 'screen' seeds × both seats (16 matches per candidate) against `wheat_only`.",
         "\n## Factorial Matrix\n",
-        "| Candidate | Managed Tiles | Hiring Strategy | Avg Final $ (Agent) | Avg Margin ($) | Avg Outcome | Wilson LB | Weeds | Movement % |",
+        "| Candidate | Managed Tiles | Hiring Strategy | Avg Final $ (Agent) | Avg Margin ($) | Avg Outcome | Wilson LB | Terminal Weeds | Movement % |",
         "|---|---|---|---|---|---|---|---|---|",
     ]
     for v, r in results.items():

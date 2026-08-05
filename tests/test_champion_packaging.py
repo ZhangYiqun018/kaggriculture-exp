@@ -106,3 +106,27 @@ def test_champion_does_not_silently_fallback():
     # Assert it finished DONE without crashing.
     statuses = env.toJSON()["statuses"]
     assert statuses == ["DONE", "DONE"], f"Episode failed: {statuses}"
+
+
+def test_packaged_artifact_forced_exception():
+    """Verify that the packaged agent's fallback harness works.
+
+    - Under KAGGRI_DEBUG_RAISE=1, a bad observation (like {"farms": 123}) raises.
+    - Under KAGGRI_DEBUG_RAISE=0, it falls back gracefully to PASS actions.
+    """
+    dist_agent = _load_dist_agent()
+    bad_obs = {"farms": 123}
+
+    # 1) If KAGGRI_DEBUG_RAISE is "1", it must raise on invalid input
+    os.environ["KAGGRI_DEBUG_RAISE"] = "1"
+    with pytest.raises(Exception):
+        dist_agent(bad_obs)
+
+    # 2) If KAGGRI_DEBUG_RAISE is "0" or unset, it must fallback to a safe PASS schema
+    os.environ["KAGGRI_DEBUG_RAISE"] = "0"
+    res = dist_agent(bad_obs)
+    assert isinstance(res, dict)
+    assert res["farmer"] == ["PASS"]
+    assert isinstance(res["hands"], list)
+    assert isinstance(res["market"], list)
+

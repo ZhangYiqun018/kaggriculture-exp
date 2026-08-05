@@ -139,7 +139,7 @@ def test_target_tile_exclusivity():
         unlocked_quadrants=("NW",), hires_today=0, tiles=gs.self_farm.tiles
     )
     custom_private = PrivateState(
-        shed={}, seeds={"WHEAT": 5}, inventories=({}, {})
+        shed={}, seeds={"WHEAT": 5, "CARROT": 5}, inventories=({}, {})
     )
     custom_gs = GameState(
         step=3, day=0, hour=3, self_farm=custom_self, opponent_farm=gs.opponent_farm,
