@@ -81,3 +81,78 @@ def test_frozen_dataclasses():
     u = A.UnitView(0, (4, 4), {})
     with pytest.raises(Exception):
         u.idx = 1
+
+
+def test_multiunit_assignment_exclusivity_and_seed_reservation():
+    """Asserts multi-unit correctness on conflicts and budgets (Phase 3R.4)."""
+    # Build custom GameState
+    env = make("kaggriculture", configuration={"episodeSteps": 10, "seed": 42}, debug=True)
+    env.run(["pass", "pass"])
+    gs = parse_state(env.state[0].observation)
+
+    # 1) Construct multiple units
+    # Farmer at (2,2), Hand1 at (2,2)
+    from kaggriculture_bot.state import GameState, FarmState, MarketState, PrivateState
+    custom_self = FarmState(
+        player=0, money=1000.0, farmer=(2, 2), hands=((2, 2),),
+        unlocked_quadrants=("NW",), hires_today=0, tiles=gs.self_farm.tiles
+    )
+    # 2) Put exactly 1 WHEAT seed in private state
+    custom_private = PrivateState(
+        shed={}, seeds={"WHEAT": 1}, inventories=({}, {})
+    )
+    custom_gs = GameState(
+        step=3, day=0, hour=3, self_farm=custom_self, opponent_farm=gs.opponent_farm,
+        market=gs.market, private=custom_private, town_shops=()
+    )
+
+    # 3) Generate two PLANT WHEAT tasks targeting the same tile (2,2) or nearby
+    task1 = T.Task("t1", T.TASK_PLANT, (2, 2), T.TIER_PLANT, 23, 100.0, crop="WHEAT")
+    task2 = T.Task("t2", T.TASK_PLANT, (3, 2), T.TIER_PLANT, 23, 90.0, crop="WHEAT")
+    
+    # 4) Greedy assign
+    asg = A.greedy_assign(custom_gs, [task1, task2])
+    
+    # Assertions:
+    assert len(asg) == 2  # unit 0 (farmer) and unit 1 (hand)
+    # Unit 0 should claim task1 (highest profit) and plant
+    assert asg[0].unit_idx == 0
+    assert asg[0].task == task1
+    assert asg[0].action == ["PLANT", "WHEAT"]
+    
+    # Unit 1 must NOT be assigned task2 because planting task1 consumed our ONLY WHEAT seed.
+    # Seed budget reservation must work inside the assignment loop.
+    assert asg[1].unit_idx == 1
+    assert asg[1].task is None
+    assert asg[1].action == ["PASS"]
+
+
+def test_target_tile_exclusivity():
+    """Asserts that at most one unit is assigned to any given tile coordinates."""
+    env = make("kaggriculture", configuration={"episodeSteps": 10, "seed": 42}, debug=True)
+    env.run(["pass", "pass"])
+    gs = parse_state(env.state[0].observation)
+
+    from kaggriculture_bot.state import GameState, FarmState, PrivateState
+    custom_self = FarmState(
+        player=0, money=1000.0, farmer=(2, 2), hands=((2, 2),),
+        unlocked_quadrants=("NW",), hires_today=0, tiles=gs.self_farm.tiles
+    )
+    custom_private = PrivateState(
+        shed={}, seeds={"WHEAT": 5}, inventories=({}, {})
+    )
+    custom_gs = GameState(
+        step=3, day=0, hour=3, self_farm=custom_self, opponent_farm=gs.opponent_farm,
+        market=gs.market, private=custom_private, town_shops=()
+    )
+
+    # Two tasks targeting exactly same tile (2,2) (e.g. PLANT WHEAT and PLANT CARROT)
+    task1 = T.Task("t1", T.TASK_PLANT, (2, 2), T.TIER_PLANT, 23, 100.0, crop="WHEAT")
+    task2 = T.Task("t2", T.TASK_PLANT, (2, 2), T.TIER_PLANT, 23, 90.0, crop="CARROT")
+
+    asg = A.greedy_assign(custom_gs, [task1, task2])
+    
+    # Farmer (0) claims task1. Hand (1) cannot claim task2 because (2,2) has a conflict lock.
+    assert asg[0].task == task1
+    assert asg[1].task is None
+    assert asg[1].action == ["PASS"]
