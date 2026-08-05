@@ -1,4 +1,4 @@
-"""Auto-generated single-file agent. Do not edit by hand."""
+"""Auto-generated single-file Kaggressriculture agent. Do not edit by hand."""
 from __future__ import annotations
 from typing import Any
 from dataclasses import dataclass, field

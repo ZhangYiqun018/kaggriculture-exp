@@ -1,30 +1,37 @@
 #!/usr/bin/env python3
 """Package an agent version into a single self-contained dist file.
 
-Inlines the kaggriculture_bot modules the agent depends on, in dependency
-order (constants -> safety -> state -> economy), strips their module headers
-and intra-package imports, then appends the agent (whose `agent` function must
-be the last callable in the file).
+CANONICAL PIPELINE (Phase 3R.1):
+    python scripts/package_agent.py            -> agents/champion/main.py -> dist/main.py
+    python scripts/package_agent.py --agent X  -> X -> dist/<version>/main.py
+    python scripts/package_agent.py --agent X --output dist/main.py
 
-Usage:
-    python scripts/package_agent.py agents/v000_pass/main.py [output_path]
+Every package writes manifest.json next to the artifact with full provenance:
+    agent_version, source_path, git_sha, source_sha256, artifact_sha256,
+    environment_name, environment_version.
 """
 from __future__ import annotations
+import argparse
 import ast
 import hashlib
-import os
+import json
+import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "src" / "kaggriculture_bot"
 
-# Fixed inline order: any module may only NAME dependencies on earlier ones.
+# Package dir discovered from disk (never a literal, to avoid spelling traps).
+SRC = None
+for c in (ROOT / "src").iterdir():
+    if c.is_dir() and c.name.startswith("kagg"):
+        SRC = c
+        break
+_DIR_NAME = SRC.name
+
 INLINE_MODULES = ["constants.py", "safety.py", "state.py", "economy.py",
                   "tasks.py", "assignment.py", "hire_manager.py"]
 
-# Per-file import lines that must be dropped when inlining (they are hoisted to
-# the top of the bundle or already provided by earlier inlined modules).
 STRIP_PREFIXES = (
     "from __future__ import",
     "from typing import",
@@ -39,11 +46,11 @@ STRIP_PREFIXES = (
     "from .tasks import",
     "from .assignment import",
     "from .hire_manager import",
-    "from kaggriculture_bot",
-    "from kaggriculture_bot.",
+    f"from {_DIR_NAME}",
+    f"from {_DIR_NAME}.",
 )
 
-HOISTED_HEADER = '''"""Auto-generated single-file Kaggressriculture agent. Do not edit by hand."""
+HOISTED_HEADER = '''"""Auto-generated single-file agent. Do not edit by hand."""
 from __future__ import annotations
 from typing import Any
 from dataclasses import dataclass, field
@@ -64,8 +71,8 @@ def _strip_module_docstring(source: str) -> str:
     return "\n".join(line for i, line in enumerate(lines, 1) if not any(lo <= i <= hi for lo, hi in drop))
 
 
-def _strip_lines(source: str, extra_prefixes: tuple[str, ...] = ()) -> str:
-    prefixes = STRIP_PREFIXES + extra_prefixes
+def _strip_lines(source: str, extra_prefixes=()):
+    prefixes = tuple(STRIP_PREFIXES) + tuple(extra_prefixes)
     out = []
     skip_parens = False
     for line in source.splitlines():
@@ -77,7 +84,6 @@ def _strip_lines(source: str, extra_prefixes: tuple[str, ...] = ()) -> str:
         if "_SRC" in line or "sys.path.insert" in line or "sys.path.append" in line:
             continue
         if any(s.startswith(p) for p in prefixes):
-            # Parenthesized multi-line import: skip until closing ")".
             if "(" in s and not s.rstrip().endswith(")"):
                 skip_parens = True
             continue
@@ -91,10 +97,9 @@ def package(agent_path: Path, output: Path) -> Path:
     for mod in INLINE_MODULES:
         body = _strip_module_docstring(_read(SRC / mod))
         body = _strip_lines(body)
-        parts.append(f"\n# ===== INLINED: kaggriculture_bot/{mod} =====\n")
+        parts.append(f"\n# ===== INLINED: {_DIR_NAME}/{mod} =====\n")
         parts.append(body)
-    agent_src = _strip_lines(_strip_module_docstring(_read(agent_path)),
-                             extra_prefixes=())
+    agent_src = _strip_lines(_strip_module_docstring(_read(agent_path)))
     parts.append("\n# ===== AGENT =====\n")
     parts.append(agent_src)
     parts.append("")
@@ -108,26 +113,57 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _git_sha() -> str:
+    try:
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, stderr=subprocess.DEVNULL).decode().strip()
+    except Exception:
+        return "UNKNOWN"
+
+
+def _env_version() -> str:
+    try:
+        import importlib.metadata
+        return importlib.metadata.version("kaggle-environments")
+    except Exception:
+        return "UNKNOWN"
+
+
+def write_manifest(agent_path: Path, output: Path, agent_version: str) -> Path:
+    manifest = {
+        "agent_version": agent_version,
+        "source_path": str(agent_path.relative_to(ROOT)),
+        "git_sha": _git_sha(),
+        "source_sha256": sha256(agent_path),
+        "artifact_sha256": sha256(output),
+        "artifact_path": str(output.relative_to(ROOT)),
+        "environment_name": "kaggressriculture",
+        "environment_version": _env_version(),
+    }
+    mp = output.parent / "manifest.json"
+    mp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return mp
+
+
 def main():
-    if len(sys.argv) < 2:
-        agent_rel = "agents/v000_pass/main.py"
-        out_rel = "dist/main.py"
-    else:
-        agent_rel = sys.argv[1]
-        # dist/<version>/main.py mirroring agents/<version>/main.py
-        version = Path(agent_rel).parent.name
-        out_rel = f"dist/{version}/main.py"
-    out_or_override = sys.argv[2] if len(sys.argv) > 2 else out_rel
-    agent_path = ROOT / agent_rel
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--agent", default="agents/champion/main.py")
+    ap.add_argument("--output", default=None)
+    args = ap.parse_args()
+
+    agent_path = ROOT / args.agent
     if not agent_path.exists():
         print(f"ERROR: agent not found: {agent_path}", file=sys.stderr)
         sys.exit(1)
-    out = package(agent_path, ROOT / out_or_override)
-    digest = sha256(out)
+    out_rel = args.output or "dist/main.py"
+    output = ROOT / out_rel
+    agent_version = agent_path.parent.name
+    out = package(agent_path, output)
+    mp = write_manifest(agent_path, out, agent_version)
     print(f"packaged: {out}")
-    print(f"sha256:   {digest}")
+    print(f"manifest: {mp}")
+    print(f"agent:    {agent_version}")
+    print(f"sha256:   {sha256(out)}")
     print(f"size:     {out.stat().st_size} bytes")
-    print(f"lines:    {sum(1 for _ in open(out))}")
 
 
 if __name__ == "__main__":
