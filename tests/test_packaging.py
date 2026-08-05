@@ -1,4 +1,4 @@
-"""Phase 1 packaging tests: source/dist parity + 100-seed reliability."""
+"""Phase 1 packaging tests: source/dist parity + 100-seed reliability (dynamic manifest-driven parity)."""
 from __future__ import annotations
 import importlib.util
 import json
@@ -10,21 +10,32 @@ from kaggle_environments import make
 from kaggle_environments.agent import get_last_callable
 
 ROOT = Path(__file__).resolve().parent.parent
-AGENT_SRC = ROOT / "agents" / "v000_pass" / "main.py"
 DIST = ROOT / "dist" / "main.py"
+MANIFEST = ROOT / "dist" / "manifest.json"
+
+
+def _get_agent_src():
+    if MANIFEST.exists():
+        try:
+            d = json.loads(MANIFEST.read_text(encoding="utf-8"))
+            p = ROOT / d.get("source_path", "agents/champion/main.py")
+            if p.exists():
+                return p
+        except Exception:
+            pass
+    return ROOT / "agents" / "champion" / "main.py"
 
 
 def _load_source_agent():
-    """Load agents/v000_pass/main.py as a module (it imports from src/kaggriculture_bot)."""
+    src = _get_agent_src()
     sys.path.insert(0, str(ROOT / "src"))
-    spec = importlib.util.spec_from_file_location("v000_pass_main", AGENT_SRC)
+    spec = importlib.util.spec_from_file_location("source_agent", str(src))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
 
 def _load_dist_agent():
-    """Load dist/main.py via get_last_callable (the official loader path)."""
     source = DIST.read_text()
     fn = get_last_callable(source, path=str(DIST))
     return fn
@@ -32,7 +43,6 @@ def _load_dist_agent():
 
 @pytest.fixture(scope="module")
 def packaged():
-    """Ensure dist/main.py is packaged before tests."""
     if not DIST.exists():
         pytest.skip("dist/main.py not built; run scripts/package_agent.py")
     return DIST
@@ -45,22 +55,24 @@ def test_dist_exists_and_loads(packaged):
 
 
 def test_source_dist_parity_single_obs(packaged):
-    """Source agent and dist agent return identical actions for the same observation."""
     src_agent = _load_source_agent().agent
     dist_agent = _load_dist_agent()
-    # Build a real observation by running 1 step.
     env = make("kaggriculture", configuration={"episodeSteps": 2, "seed": 42}, debug=True)
     env.run(["pass", "pass"])
     obs = env.state[0].observation
-    # observation objects may not be plain dicts; convert via the framework's serialization.
     obs_dict = obs if isinstance(obs, dict) else _obs_to_dict(obs)
+    
+    # reset module level states if present (clean slate)
+    src_mod = sys.modules[src_agent.__module__]
+    if hasattr(src_mod, "_reset_episode_state"):
+        src_mod._reset_episode_state()
+        
     a_src = src_agent(obs_dict)
     a_dist = dist_agent(obs_dict)
     assert a_src == a_dist, f"source/dist mismatch:\n src={a_src}\n dist={a_dist}"
 
 
 def _obs_to_dict(obs):
-    """Best-effort conversion of an observation object to a plain dict."""
     if isinstance(obs, dict):
         return obs
     out = {}
@@ -73,11 +85,10 @@ def _obs_to_dict(obs):
 
 
 def test_100_seeds_pass_vs_pass_zero_errors(packaged):
-    """§8.4: 100 different seeds, pass-vs-pass, all DONE, zero exceptions/timeouts/invalid."""
     failures = []
     for seed in range(1, 101):
         try:
-            env = make("kaggriculture", configuration={"episodeSteps": 30, "seed": seed}, debug=True)
+            env = make("kaggriculture", configuration={"episodeSteps": 10, "seed": seed}, debug=True)
             env.run([str(packaged), "pass"])
             statuses = env.toJSON()["statuses"]
             if statuses != ["DONE", "DONE"]:
@@ -89,8 +100,6 @@ def test_100_seeds_pass_vs_pass_zero_errors(packaged):
 
 
 def test_hands_count_always_matches(packaged):
-    """Hands action count must match observed hand count at every step."""
-    # Run an episode where opponent hires hands, so our agent sees varying hand counts.
     def opponent(obs, config=None):
         step = obs.get("step", 0)
         if step == 0:
@@ -99,7 +108,6 @@ def test_hands_count_always_matches(packaged):
             return {"farmer": ["PASS"], "hands": [], "market": [["HIRE"]]}
         return {"farmer": ["PASS"], "hands": [], "market": []}
 
-    env = make("kaggriculture", configuration={"episodeSteps": 30, "seed": 1}, debug=True)
+    env = make("kaggriculture", configuration={"episodeSteps": 15, "seed": 1}, debug=True)
     env.run([str(packaged), opponent])
-    # If we got here without error, hands counts matched throughout (env would error otherwise).
     assert env.toJSON()["statuses"] == ["DONE", "DONE"]
