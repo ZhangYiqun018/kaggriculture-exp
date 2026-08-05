@@ -32,7 +32,17 @@ OPPONENTS = {
     "crop_closed_loop": [
         ("starter", "starter"),
     ],
-    "economic_control": [],
+    "replay_tape_lineage": [
+        ("moon", "opponents/public/moon_counts_melons.py"),
+        ("soil", "opponents/public/soil_remembers_rain.py"),
+        ("roman_anchor", "opponents/public/roman_hamburger_anchor.py"),
+    ],
+    "learned_market_ranker": [
+        ("kaito_v17", "opponents/public/kaitofukami_v17_market_ranker.py"),
+    ],
+    "economic_control": [
+        ("pilkwang", "opponents/public/pilkwang_economic_control.py"),
+    ],
     "historical_own_agents": [],
 }
 

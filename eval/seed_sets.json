@@ -8,9 +8,9 @@
   "_families": {
     "basic_baselines": ["pass", "deterministic_random", "wheat_only", "crop_diversified"],
     "crop_closed_loop": ["starter", "melon_wheat", "conservative_cash"],
-    "replay_tape_lineage": [],
-    "learned_market_ranker": [],
-    "economic_control": ["market_dump"],
+    "replay_tape_lineage": ["moon", "soil", "roman_anchor"],
+    "learned_market_ranker": ["kaito_v17"],
+    "economic_control": ["pilkwang"],
     "historical_own_agents": ["previous_champion"]
   }
 }

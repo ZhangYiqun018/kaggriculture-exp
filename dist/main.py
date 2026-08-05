@@ -1049,12 +1049,26 @@ def hand_count_from_obs(obs) -> int:
 
 
 
-MANAGED_TILES = [
-    (2, 2), (3, 2), (4, 2), (2, 3), (3, 3), (4, 3),
-    (2, 4), (3, 4), (1, 2), (1, 3), (1, 1), (2, 1), (3, 1), (0, 0), (1, 0), (0, 1),
-]
-TARGET_HANDS_DAY = 6
+# Layout definitions
+LAYOUTS = {
+    "current_16": [
+        (2, 2), (3, 2), (4, 2), (2, 3), (3, 3), (4, 3),
+        (2, 4), (3, 4), (1, 2), (1, 3), (1, 1), (2, 1), (3, 1), (0, 0), (1, 0), (0, 1),
+    ],
+    "nearest_16": [
+        (3, 4), (4, 3), (2, 4), (3, 3), (4, 2), (1, 4), (2, 3), (3, 2),
+        (4, 1), (0, 4), (1, 3), (2, 2), (3, 1), (4, 0), (0, 3), (1, 2)
+    ],
+    "compact_24": [
+        (x, y) for y in range(5) for x in range(5) if (x, y) != (4, 4)
+    ]
+}
 
+# Settable via evaluation script patching
+LAYOUT_MODE = "nearest_16"
+MANAGED_TILES = LAYOUTS[LAYOUT_MODE]
+
+TARGET_HANDS_DAY = 6
 _EP = {}
 
 
@@ -1079,6 +1093,9 @@ def _seed_demand(gs, tasks) -> dict:
 
 
 def core_agent(obs, config=None):
+    # Dynamically bind the current selected layout on execution
+    tiles = LAYOUTS[LAYOUT_MODE]
+    
     gs = parse_state(obs)
     if gs.step == 0:
         _reset_episode_state()
@@ -1088,7 +1105,7 @@ def core_agent(obs, config=None):
     shed = private.shed
     seeds = private.seeds
 
-    tasks = generate_tasks(gs, MANAGED_TILES)
+    tasks = generate_tasks(gs, tiles)
     assignments = greedy_assign(gs, tasks)
 
     farmer_action = assignments[0].action if assignments else ["PASS"]
@@ -1102,7 +1119,6 @@ def core_agent(obs, config=None):
             market.append(["SELL", item, n])
 
     # HIRE: True sequential marginal hiring with diminishing returns (Phase 3R.5).
-    # We query plan_hires ONCE to get the globally optimal planned hires for today.
     optimal_hires = plan_hires(gs, tasks, max_hands=TARGET_HANDS_DAY, cash_reserve=400)
     for _ in range(optimal_hires):
         if len(market) >= 10:
