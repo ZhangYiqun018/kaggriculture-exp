@@ -177,21 +177,27 @@ def generate_tasks(gs: GameState, managed_tiles: list[tuple[int, int]], crop_pla
                 value_now = _harvest_value(gs, crop, tile.yield_units)
                 
                 # 6. Replace sunk-cost average NPV with incremental harvest-now vs wait value.
-                max_age = cd["max_yield_day"]
-                max_yield = expected_yield(crop, max_age)
-                value_max = _harvest_value(gs, crop, max_yield)
-                
-                extra_days_to_wait = max(1, max_age - age)
-                opportunity_cost = max_alt_profit_per_day * extra_days_to_wait
-                
-                decaying = tile.max_lifespan_step >= 0 and step >= tile.max_lifespan_step
-                terminal_squeeze = day >= 28
-                
-                # If value of harvesting now + alternative profit > waiting for max yield, we harvest now.
-                should_harvest = (age >= max_age) or decaying or terminal_squeeze or (value_now + opportunity_cost >= value_max)
+                # If the crop is an ongoing crop (Tomato/Strawberry), we always harvest immediately (Stage v060)
+                if cd["ongoing"]:
+                    should_harvest = True
+                else:
+                    max_age = cd["max_yield_day"]
+                    max_yield = expected_yield(crop, max_age)
+                    value_max = _harvest_value(gs, crop, max_yield)
+                    
+                    extra_days_to_wait = max(1, max_age - age)
+                    opportunity_cost = max_alt_profit_per_day * extra_days_to_wait
+                    
+                    decaying = tile.max_lifespan_step >= 0 and step >= tile.max_lifespan_step
+                    terminal_squeeze = day >= 28
+                    
+                    # If value of harvesting now + alternative profit > waiting for max yield, we harvest now.
+                    should_harvest = (age >= max_age) or decaying or terminal_squeeze or (value_now + opportunity_cost >= value_max)
                 
                 # 5. Do not emit HARVEST tasks when should_harvest is false.
                 if should_harvest:
+                    decaying = tile.max_lifespan_step >= 0 and step >= tile.max_lifespan_step
+                    terminal_squeeze = day >= 28
                     tier = TIER_DECAY if (decaying or terminal_squeeze) else (
                         TIER_HARVEST_HIGH if value_now >= 100 else TIER_ROUTINE)
                     tasks.append(Task(

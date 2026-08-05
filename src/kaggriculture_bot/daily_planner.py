@@ -1,7 +1,7 @@
-"""Daily Planner (Stage v040).
+"""Daily Planner (Stage v060).
 
 Manages lightweight DailyPlan containing active_tiles, crop_plan, target_hands,
-land_orders, and cash_reserve.
+land_orders, and cash_reserve. Supports multi-quadrant expansion (NE/SW) and max hands (13).
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -32,47 +32,66 @@ def compute_daily_plan(gs: GameState, include_strawberry: bool = True, include_l
     ]
     all_nw = [(x, y) for y in range(5) for x in range(5) if (x, y) != (4, 4)]
 
-    # 1. Start from nearest_16, activate all 25 NW tiles when workload allows (day >= 4 and money >= 1200)
+    # 1. Choose active tiles for NW
+    # Start from nearest_16, activate all 25 NW tiles when workload allows (day >= 4 and money >= 1200)
     if day >= 4 and money >= 1200:
-        active_tiles = all_nw
+        active_tiles = list(all_nw)
     else:
-        active_tiles = nearest_16
+        active_tiles = list(nearest_16)
 
-    # If NE is unlocked, we add all 25 plantable tiles in NE quadrant!
+    # If NE is unlocked, we add all 25 plantable tiles in NE quadrant (excluding shed NE 5,4)
     if "NE" in unlocked:
         ne_tiles = [(x, y) for y in range(5) for x in range(5, 10) if (x, y) != (5, 4)]
         active_tiles = active_tiles + ne_tiles
 
-    # 2. Buy land conditionally (to unlock NE)
+    # If SW is unlocked, we add all 25 plantable tiles in SW quadrant (excluding shed SW 4,5)
+    if "SW" in unlocked:
+        sw_tiles = [(x, y) for y in range(5, 10) for x in range(5) if (x, y) != (4, 5)]
+        active_tiles = active_tiles + sw_tiles
+
+    # 2. Buy land conditionally (to unlock NE first, then SW)
     land_orders = []
     cash_reserve = 400
-    if include_land and "NE" not in unlocked and 10 <= day <= 18:
-        # Check safe cash reserve: land cost is $1000.
-        # We require at least $2500 so we have at least $1500 remaining for robust seeds and hiring.
-        if money >= 2500:
-            land_orders.append(["BUY_LAND"])
-            cash_reserve = 600  # keep a higher reserve on the turn we buy land
+    
+    if include_land:
+        if "NE" not in unlocked:
+            # NE cost is $1000. Require day <= 20 and at least $1800 (leaving $800 capital)
+            if 4 <= day <= 20 and money >= 1800:
+                land_orders.append(["BUY_LAND"])
+                cash_reserve = 500
+        elif "SW" not in unlocked:
+            # SW cost is $2000. Require day <= 20 and at least $3000 (leaving $1000 capital)
+            if 6 <= day <= 20 and money >= 3000:
+                land_orders.append(["BUY_LAND"])
+                cash_reserve = 600
+                land_orders.append(["BUY_LAND"])
+                cash_reserve = 800
 
     # 3. Dynamic hand scaling
-    # Scale hands dynamically up to 10/12 based on the number of active tiles:
+    # Scale hands dynamically up to 13 based on the number of active tiles:
     # - 16 tiles: 6 hands
     # - 25 tiles (NW): 8 hands
-    # - 50 tiles (NW+NE): 12 hands
+    # - 50 tiles (NW+NE): 11 hands
+    # - 75 tiles (NW+NE+SW): 13 hands (max)
     n_tiles = len(active_tiles)
     if n_tiles <= 16:
         target_hands = 6
     elif n_tiles <= 25:
         target_hands = 8
+    elif n_tiles <= 50:
+        target_hands = 11
     else:
-        target_hands = 12
+        target_hands = 13
 
     # 4. Generate CropPlan
     farm = gs.self_farm
     empty_tiles = [tile for tile in active_tiles if farm.tile(tile[0], tile[1]).empty]
 
+    # Full competitive crops pool (WHEAT, CARROT, MELON, TOMATO, STRAWBERRY)
     crops_pool = ["WHEAT", "CARROT", "MELON"]
     if include_strawberry:
         crops_pool.append("STRAWBERRY")
+        crops_pool.append("TOMATO")
 
     crop_plan = get_crop_plan(gs, empty_tiles, crops_pool=crops_pool)
 

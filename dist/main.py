@@ -684,47 +684,66 @@ def compute_daily_plan(gs: GameState, include_strawberry: bool = True, include_l
     ]
     all_nw = [(x, y) for y in range(5) for x in range(5) if (x, y) != (4, 4)]
 
-    # 1. Start from nearest_16, activate all 25 NW tiles when workload allows (day >= 4 and money >= 1200)
+    # 1. Choose active tiles for NW
+    # Start from nearest_16, activate all 25 NW tiles when workload allows (day >= 4 and money >= 1200)
     if day >= 4 and money >= 1200:
-        active_tiles = all_nw
+        active_tiles = list(all_nw)
     else:
-        active_tiles = nearest_16
+        active_tiles = list(nearest_16)
 
-    # If NE is unlocked, we add all 25 plantable tiles in NE quadrant!
+    # If NE is unlocked, we add all 25 plantable tiles in NE quadrant (excluding shed NE 5,4)
     if "NE" in unlocked:
         ne_tiles = [(x, y) for y in range(5) for x in range(5, 10) if (x, y) != (5, 4)]
         active_tiles = active_tiles + ne_tiles
 
-    # 2. Buy land conditionally (to unlock NE)
+    # If SW is unlocked, we add all 25 plantable tiles in SW quadrant (excluding shed SW 4,5)
+    if "SW" in unlocked:
+        sw_tiles = [(x, y) for y in range(5, 10) for x in range(5) if (x, y) != (4, 5)]
+        active_tiles = active_tiles + sw_tiles
+
+    # 2. Buy land conditionally (to unlock NE first, then SW)
     land_orders = []
     cash_reserve = 400
-    if include_land and "NE" not in unlocked and 10 <= day <= 18:
-        # Check safe cash reserve: land cost is $1000.
-        # We require at least $2500 so we have at least $1500 remaining for robust seeds and hiring.
-        if money >= 2500:
-            land_orders.append(["BUY_LAND"])
-            cash_reserve = 600  # keep a higher reserve on the turn we buy land
+    
+    if include_land:
+        if "NE" not in unlocked:
+            # NE cost is $1000. Require day <= 20 and at least $1800 (leaving $800 capital)
+            if 4 <= day <= 20 and money >= 1800:
+                land_orders.append(["BUY_LAND"])
+                cash_reserve = 500
+        elif "SW" not in unlocked:
+            # SW cost is $2000. Require day <= 20 and at least $3000 (leaving $1000 capital)
+            if 6 <= day <= 20 and money >= 3000:
+                land_orders.append(["BUY_LAND"])
+                cash_reserve = 600
+                land_orders.append(["BUY_LAND"])
+                cash_reserve = 800
 
     # 3. Dynamic hand scaling
-    # Scale hands dynamically up to 10/12 based on the number of active tiles:
+    # Scale hands dynamically up to 13 based on the number of active tiles:
     # - 16 tiles: 6 hands
     # - 25 tiles (NW): 8 hands
-    # - 50 tiles (NW+NE): 12 hands
+    # - 50 tiles (NW+NE): 11 hands
+    # - 75 tiles (NW+NE+SW): 13 hands (max)
     n_tiles = len(active_tiles)
     if n_tiles <= 16:
         target_hands = 6
     elif n_tiles <= 25:
         target_hands = 8
+    elif n_tiles <= 50:
+        target_hands = 11
     else:
-        target_hands = 12
+        target_hands = 13
 
     # 4. Generate CropPlan
     farm = gs.self_farm
     empty_tiles = [tile for tile in active_tiles if farm.tile(tile[0], tile[1]).empty]
 
+    # Full competitive crops pool (WHEAT, CARROT, MELON, TOMATO, STRAWBERRY)
     crops_pool = ["WHEAT", "CARROT", "MELON"]
     if include_strawberry:
         crops_pool.append("STRAWBERRY")
+        crops_pool.append("TOMATO")
 
     crop_plan = get_crop_plan(gs, empty_tiles, crops_pool=crops_pool)
 
@@ -899,21 +918,27 @@ def generate_tasks(gs: GameState, managed_tiles: list[tuple[int, int]], crop_pla
                 value_now = _harvest_value(gs, crop, tile.yield_units)
                 
                 # 6. Replace sunk-cost average NPV with incremental harvest-now vs wait value.
-                max_age = cd["max_yield_day"]
-                max_yield = expected_yield(crop, max_age)
-                value_max = _harvest_value(gs, crop, max_yield)
-                
-                extra_days_to_wait = max(1, max_age - age)
-                opportunity_cost = max_alt_profit_per_day * extra_days_to_wait
-                
-                decaying = tile.max_lifespan_step >= 0 and step >= tile.max_lifespan_step
-                terminal_squeeze = day >= 28
-                
-                # If value of harvesting now + alternative profit > waiting for max yield, we harvest now.
-                should_harvest = (age >= max_age) or decaying or terminal_squeeze or (value_now + opportunity_cost >= value_max)
+                # If the crop is an ongoing crop (Tomato/Strawberry), we always harvest immediately (Stage v060)
+                if cd["ongoing"]:
+                    should_harvest = True
+                else:
+                    max_age = cd["max_yield_day"]
+                    max_yield = expected_yield(crop, max_age)
+                    value_max = _harvest_value(gs, crop, max_yield)
+                    
+                    extra_days_to_wait = max(1, max_age - age)
+                    opportunity_cost = max_alt_profit_per_day * extra_days_to_wait
+                    
+                    decaying = tile.max_lifespan_step >= 0 and step >= tile.max_lifespan_step
+                    terminal_squeeze = day >= 28
+                    
+                    # If value of harvesting now + alternative profit > waiting for max yield, we harvest now.
+                    should_harvest = (age >= max_age) or decaying or terminal_squeeze or (value_now + opportunity_cost >= value_max)
                 
                 # 5. Do not emit HARVEST tasks when should_harvest is false.
                 if should_harvest:
+                    decaying = tile.max_lifespan_step >= 0 and step >= tile.max_lifespan_step
+                    terminal_squeeze = day >= 28
                     tier = TIER_DECAY if (decaying or terminal_squeeze) else (
                         TIER_HARVEST_HIGH if value_now >= 100 else TIER_ROUTINE)
                     tasks.append(Task(
@@ -1501,7 +1526,8 @@ def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
 
     # 1.6. Livestock purchase and Wheat buffer management (Stage v041)
     if include_livestock:
-        # Count existing and planned animals to support 2 cows + 2 sheep only
+        unlocked = farm.unlocked_quadrants
+        # Count existing and planned animals to support dynamic cows + sheep scaling
         cows_on_board = 0
         sheep_on_board = 0
         for row in farm.tiles:
@@ -1525,13 +1551,24 @@ def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
         pending_cows = len([o for o in market_orders if o[0] == "BUY_ANIMAL" and o[1] == "COW"])
         pending_sheep = len([o for o in market_orders if o[0] == "BUY_ANIMAL" and o[1] == "SHEEP"])
         
-        # Support 2 cows + 2 sheep only (Stage v041 / v050)
-        # Limit purchases to day <= 14 and require robust cash reserve so we don't starve crops.
-        if 2 <= gs.day <= 14:
-            if total_cows + pending_cows < 2 and money >= cash_reserve + 1000:
+        # Scale livestock dynamically based on unlocked quadrants (Stage v060)
+        if "SW" in unlocked:
+            target_cows = 6
+            target_sheep = 4
+        elif "NE" in unlocked:
+            target_cows = 4
+            target_sheep = 3
+        else:
+            target_cows = 2
+            target_sheep = 2
+
+        # Support dynamic cows + sheep scaling
+        # Limit purchases to day <= 16 and require robust cash reserve so we don't starve crops.
+        if 2 <= gs.day <= 16:
+            if total_cows + pending_cows < target_cows and money >= cash_reserve + 600:
                 market_orders.append(["BUY_ANIMAL", "COW", 1])
                 money -= 400.0
-            if total_sheep + pending_sheep < 2 and money >= cash_reserve + 1200:
+            if total_sheep + pending_sheep < target_sheep and money >= cash_reserve + 800:
                 market_orders.append(["BUY_ANIMAL", "SHEEP", 1])
                 money -= 500.0
             
