@@ -1,9 +1,9 @@
 {
-  "agent_version": "champion",
-  "source_path": "agents/champion/main.py",
-  "git_sha": "6f7fad652834bf55ef97c3f3dc2226a5699364a2",
-  "source_sha256": "05a2af8339dc080d2cb398c04015cb776fd7e0dd8982d4041dde1a1d3d0ae72a",
-  "artifact_sha256": "a2b106d340c98a12f694b2723cf757252384f5993261f70c816b3a1d998647a6",
+  "agent_version": "v020_hands",
+  "source_path": "agents/v020_hands/main.py",
+  "git_sha": "15a5b92b3ea99a718e9ccca4f71d78fd4eacf2cc",
+  "source_sha256": "7503551eccad660ac70fef7ed8115958058bf9d29544dcdbdf929a5bd5c54062",
+  "artifact_sha256": "8a1b1073d16dbc5879bed3788e346373b74a94eed894fba2fc17f3be939c54bf",
   "artifact_path": "dist/main.py",
   "environment_name": "kaggressriculture",
   "environment_version": "1.32.3"

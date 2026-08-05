@@ -71,15 +71,14 @@ def core_agent(obs, config=None):
         if n > 0:
             market.append(["SELL", item, n])
 
-    n_planned_hires = len([m for m in market if m and m[0] == "HIRE"])
-    while farm.hand_count + n_planned_hires < TARGET_HANDS_DAY:
+    # HIRE: True sequential marginal hiring with diminishing returns (Phase 3R.5).
+    # We query plan_hires ONCE to get the globally optimal planned hires for today.
+    from kaggriculture_bot.hire_manager import plan_hires
+    optimal_hires = plan_hires(gs, tasks, max_hands=TARGET_HANDS_DAY, cash_reserve=400)
+    for _ in range(optimal_hires):
         if len(market) >= 10:
             break
-        if should_hire(gs, tasks, cash_reserve=400):
-            market.append(["HIRE"])
-            n_planned_hires += 1
-        else:
-            break
+        market.append(["HIRE"])
 
     for crop, n in _seed_demand(gs, tasks).items():
         if len(market) >= 10:

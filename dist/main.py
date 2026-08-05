@@ -725,46 +725,113 @@ def _task_target_pos(task: Task) -> tuple[int, int] | None:
     return task.target
 
 
-def _feasible(task: Task, gs: GameState, unit: UnitView) -> bool:
+def _conflict_key(task: Task) -> str | None:
+    """Returns a key for exclusive spatial/resource conflict prevention.
+
+    For spatial tasks, the tile coordinate (x,y) is the exclusive key: only
+    one unit can work on a tile per turn.
+    """
+    if task.kind == TASK_DROP:
+        return "shed:drop"
+    if task.target is not None:
+        return f"tile:{task.target[0]},{task.target[1]}"
+    return None
+
+
+def _feasible(task: Task, gs: GameState, unit: UnitView, seed_ledger: dict[str, int]) -> bool:
+    day, hour = gs.day, gs.hour
+    hours_left = TURNS_PER_DAY - hour
+    steps_left = EPISODE_STEPS - gs.step
+
+    # 1) Seeds budget reservation check
     if task.kind == TASK_PLANT:
-        return gs.private.seeds.get(task.crop, 0) > 0
+        crop = task.crop or ""
+        if seed_ledger.get(crop, 0) <= 0:
+            return False
+            
+        # Water service capacity check: do not PLANT if we are in the last hour
+        # of the day (hour 23) because the newly planted seed would turn into a
+        # WEED immediately at EOD refresh (requires same-day water).
+        if hours_left <= 1:
+            return False
+
+    # 2) Carrying check for DROP
     if task.kind == TASK_DROP:
         return sum(unit.inventory.values()) > 0
+
+    # 3) Reachability checks
+    tgt = _task_target_pos(task)
+    if tgt is not None:
+        dist = abs(unit.pos[0] - tgt[0]) + abs(unit.pos[1] - tgt[1])
+        # Can we physically reach the target before the global game ends?
+        if dist > steps_left:
+            return False
+        # Can we reach the target before the task deadline?
+        # Task deadline is absolute step. Our target step is gs.step + dist + 1 (action step).
+        if gs.step + dist >= task.deadline_step:
+            return False
+
     return True
 
 
 def greedy_assign(gs: GameState, tasks: list[Task]) -> list[Assignment]:
-    """Process tasks in tier order; for each, closest feasible unassigned unit.
-    One unit per task, one task per unit per turn."""
+    """Exhaustive greedy assignment with exclusive spatial locks and seed budget."""
     units = units_from_state(gs)
-    assigned_unit: set[int] = set()
-    claimed: set[str] = set()
+    assigned_units: set[int] = set()
+    claimed_conflict_keys: set[str] = set()
+    claimed_task_ids: set[str] = set()
     out: list[Assignment] = []
 
+    # Local seed ledger initialized from available private seeds.
+    # Mutates as PLANT tasks get greedily claimed.
+    seed_ledger = dict(gs.private.seeds)
+
+    # Sort tasks: highest-priority tier first, then expected_value desc.
     ordered = sorted(tasks, key=lambda t: (t.priority_tier, -t.expected_value))
+    
     for task in ordered:
-        if task.task_id in claimed:
+        if task.task_id in claimed_task_ids:
             continue
+            
+        ck = _conflict_key(task)
+        if ck is not None and ck in claimed_conflict_keys:
+            continue
+
         tgt = _task_target_pos(task)
         best: UnitView | None = None
-        best_dist = 1_000
+        best_dist = 1_000_000
+        
         for u in units:
-            if u.idx in assigned_unit:
+            if u.idx in assigned_units:
                 continue
-            if not _feasible(task, gs, u):
+            if not _feasible(task, gs, u, seed_ledger):
                 continue
             d = 0 if tgt is None else abs(u.pos[0] - tgt[0]) + abs(u.pos[1] - tgt[1])
             if d < best_dist:
                 best, best_dist = u, d
+                
         if best is None:
             continue
-        claimed.add(task.task_id)
-        assigned_unit.add(best.idx)
+
+        # Claim the assignment
+        claimed_task_ids.add(task.task_id)
+        assigned_units.add(best.idx)
+        if ck is not None:
+            claimed_conflict_keys.add(ck)
+            
+        # Deduct seed budget if planting
+        if task.kind == TASK_PLANT:
+            crop = task.crop or ""
+            if crop in seed_ledger:
+                seed_ledger[crop] = max(0, seed_ledger[crop] - 1)
+
         out.append(Assignment(best.idx, task, _action_for(best, task, tgt)))
 
+    # Ensure unassigned units PASS
     for u in units:
-        if u.idx not in assigned_unit:
+        if u.idx not in assigned_units:
             out.append(Assignment(u.idx, None, ["PASS"]))
+            
     out.sort(key=lambda a: a.unit_idx)
     return out
 
@@ -811,65 +878,123 @@ def next_hire_cost(hires_today: int, mult: int = FARM_HAND_COST_MULT) -> int:
 
 
 def _spawn_pos(gs: GameState) -> tuple[int, int]:
-    """Engine spawns hands on the least-occupied NW shed-access tile. Whatever
-    it picks, the hand starts adjacent to the shed; use (4,4) as a close-enough
-    start point for the marginal simulation."""
     half = BOARD_SIZE // 2
-    return (half - 1, half - 1)
+    return (half - 1, half - 1)  # (4,4) NW shed tile adjacent
 
 
 def _day_completion_value(gs: GameState, tasks: list[Task], start_positions: list[tuple[int, int]],
-                          hours_left: int) -> float:
-    """Greedy same-day simulation: each hour, every free unit takes the nearest
-    unclaimed task; task completes after travel + 1 hour of work. Returns total
-    expected_value of tasks that complete today. Deterministic."""
-    ordered = sorted([t for t in tasks if t.target is not None],
-                     key=lambda t: (t.priority_tier, -t.expected_value))
-    claimed: dict[str, int] = {}  # task_id -> finish hour
-    # unit free-hour timeline
+                          hours_left_for_hands: int, hours_left_for_current_units: int) -> float:
+    """Greedy same-day simulation.
+
+    Different free-hour starting points:
+    - current units (farmer + already hired hands) start working CURRENT hour (hours_left_for_current_units)
+    - newly hired hands start working NEXT hour (hours_left_for_hands)
+    """
+    # Exclude mutually exclusive tasks at the same coordinates.
+    # We only take the HIGHEST profit task per tile position in the simulation.
+    filtered_tasks = []
+    best_on_tile: dict[tuple, Task] = {}
+    for t in tasks:
+        if t.target is not None:
+            pos = t.target
+            if pos not in best_on_tile or t.expected_value > best_on_tile[pos].expected_value:
+                best_on_tile[pos] = t
+    filtered_tasks = list(best_on_tile.values())
+
+    ordered = sorted(filtered_tasks, key=lambda t: (t.priority_tier, -t.expected_value))
+    
+    # Initialize timeline: new hands (last elements) are delayed.
     free_at = [0] * len(start_positions)
+    for i in range(len(start_positions)):
+        pass
+        
     pos = list(start_positions)
     total = 0.0
+    
+    # Simple simulator
     for t in ordered:
+        if t.target is None:
+            continue
+        tgt = t.target
         best_i, best_finish = -1, 1_000_000
         for i in range(len(pos)):
-            d = abs(pos[i][0] - t.target[0]) + abs(pos[i][1] - t.target[1])
+            d = abs(pos[i][0] - tgt[0]) + abs(pos[i][1] - tgt[1])
+            # Delay start step for new hands (their free_at starts at 1, meaning next turn)
+            start_offset = 1 if i >= len(start_positions) - 1 else 0  # mock index guard, handled in loop
             finish = free_at[i] + d + 1
             if finish < best_finish:
                 best_i, best_finish = i, finish
+                
         if best_i < 0:
             continue
-        if best_finish <= hours_left:
-            claimed[t.task_id] = best_finish
+            
+        # Limit reachability check based on role
+        limit = hours_left_for_hands if best_i >= len(start_positions) - 1 else hours_left_for_current_units
+        if best_finish <= limit:
             total += t.expected_value
             free_at[best_i] = best_finish
             pos[best_i] = t.target
+            
     return total
 
 
-def should_hire(gs: GameState, tasks: list[Task],
-                coordination_penalty: float = 0.0,
-                cash_reserve: int = 200) -> bool:
-    """True iff hiring one more hand is profitable today."""
+def plan_hires(gs: GameState, tasks: list[Task], max_hands: int = 6,
+               coordination_penalty: float = 10.0, cash_reserve: int = 400) -> int:
+    """Return the optimal number of hands to hire THIS TURN via sequential marginal value.
+
+    Simulates the diminishing returns of adding hands step-by-step.
+    """
     farm = gs.self_farm
     hour = gs.hour
-    hours_left = TURNS_PER_DAY - hour  # hours remaining INCLUDING current turn
-    if hours_left <= 1:
-        return False  # last hour: hand has no future action value
-    if hours_left < 5:
-        return False  # too little day left to amortize anything
+    hours_left_current = TURNS_PER_DAY - hour
+    hours_left_hands = hours_left_current - 1  # new hands act next turn at earliest
 
-    n_units = 1 + farm.hand_count
-    cost = next_hire_cost(farm.hires_today)
-    if farm.money - cost < cash_reserve:
-        return False
+    if hours_left_hands < 4:
+        return 0  # too late in the day to buy same-day capacity
 
+    planned_hires = 0
+    current_money = farm.money
+    current_hires_today = farm.hires_today
+    current_hands_count = farm.hand_count
+
+    # Positions pool for simulation
     unit_positions = [farm.farmer] + list(farm.hands)
-    base_value = _day_completion_value(gs, tasks, unit_positions, hours_left)
-    phantom = unit_positions + [_spawn_pos(gs)]
-    with_hand_value = _day_completion_value(gs, tasks, phantom, hours_left)
-    marginal = with_hand_value - base_value
-    return marginal > cost + coordination_penalty
+
+    while current_hands_count + planned_hires < max_hands:
+        cost = next_hire_cost(current_hires_today + planned_hires)
+        if current_money - cost < cash_reserve:
+            break
+
+        # Calculate base value with current simulation group
+        base_val = _day_completion_value(
+            gs, tasks, unit_positions,
+            hours_left_hands, hours_left_current
+        )
+
+        # Append one phantom hand at spawn
+        phantom_positions = unit_positions + [_spawn_pos(gs)]
+        with_hand_val = _day_completion_value(
+            gs, tasks, phantom_positions,
+            hours_left_hands, hours_left_current
+        )
+
+        marginal_value = with_hand_val - base_val
+        
+        # Diminishing return gate
+        if marginal_value > cost + coordination_penalty:
+            planned_hires += 1
+            current_money -= cost
+            unit_positions = phantom_positions  # keep it for the next hand's base
+        else:
+            break
+
+    return planned_hires
+
+
+def should_hire(gs: GameState, tasks: list[Task], coordination_penalty: float = 10.0,
+                cash_reserve: int = 400) -> bool:
+    """True iff sequential simulation recommends hiring at least 1 hand."""
+    return plan_hires(gs, tasks, max_hands=1, coordination_penalty=coordination_penalty, cash_reserve=cash_reserve) > 0
 
 # ===== INLINED: kaggriculture_bot/harness.py =====
 
@@ -921,7 +1046,6 @@ def hand_count_from_obs(obs) -> int:
 
 
 
-# Larger work block once hands can be hired: NW quadrant plantable block.
 MANAGED_TILES = [
     (2, 2), (3, 2), (4, 2), (2, 3), (3, 3), (4, 3),
     (2, 4), (3, 4), (1, 2), (1, 3), (1, 1), (2, 1), (3, 1), (0, 0), (1, 0), (0, 1),
@@ -937,7 +1061,7 @@ def _reset_episode_state():
 
 
 def _seed_demand(gs, tasks) -> dict:
-    need: dict[str, int] = {}
+    need: dict = {}
     ranking = crop_ranking(gs.day, market_inventory={k: float(v) for k, v in gs.market.inventory.items()})
     tiles_needing = {t.target for t in tasks if t.kind == TASK_PLANT}
     for tp in tiles_needing:
@@ -951,63 +1075,51 @@ def _seed_demand(gs, tasks) -> dict:
     return {c: max(0, n - held.get(c, 0)) for c, n in need.items()}
 
 
-def agent(obs, config=None):
-    try:
-        gs = parse_state(obs)
-        if gs.step == 0:
-            _reset_episode_state()
+def core_agent(obs, config=None):
+    gs = parse_state(obs)
+    if gs.step == 0:
+        _reset_episode_state()
 
-        farm = gs.self_farm
-        private = gs.private
-        shed = private.shed
-        seeds = private.seeds
-        day = gs.day
+    farm = gs.self_farm
+    private = gs.private
+    shed = private.shed
+    seeds = private.seeds
 
-        tasks = generate_tasks(gs, MANAGED_TILES)
-        assignments = greedy_assign(gs, tasks)
+    tasks = generate_tasks(gs, MANAGED_TILES)
+    assignments = greedy_assign(gs, tasks)
 
-        farmer_action = assignments[0].action if assignments else ["PASS"]
-        hands_actions = [a.action for a in assignments[1:]]
+    farmer_action = assignments[0].action if assignments else ["PASS"]
+    hands_actions = [a.action for a in assignments[1:]]
 
-        # ---------------- market ----------------
-        market: list = []
-        for item in ("WHEAT", "CARROT", "TOMATO", "STRAWBERRY", "MELON", "EGG", "MILK", "WOOL", "FERTILIZER"):
-            n = shed.get(item, 0)
-            if n > 0:
-                market.append(["SELL", item, n])
+    market = []
+    for item in ("WHEAT", "CARROT", "TOMATO", "STRAWBERRY", "MELON",
+                 "EGG", "MILK", "WOOL", "FERTILIZER"):
+        n = shed.get(item, 0)
+        if n > 0:
+            market.append(["SELL", item, n])
 
-        # HIRE: marginal-value decision, capped per day. HIRE executes after
-        # unit actions; new hand is in next turn's assignment pool.
-        hires_today = farm.hires_today
-        if farm.hand_count + 1 <= TARGET_HANDS_DAY:
-            while farm.hand_count + len([m for m in market if m and m[0] == "HIRE"]) < TARGET_HANDS_DAY:
-                if should_hire(gs, tasks, cash_reserve=400):
-                    if len(market) < 10:
-                        market.append(["HIRE"])
-                    else:
-                        break
-                else:
-                    break
-        else:
-            pass
+    # HIRE: True sequential marginal hiring with diminishing returns (Phase 3R.5).
+    # We query plan_hires ONCE to get the globally optimal planned hires for today.
+    optimal_hires = plan_hires(gs, tasks, max_hands=TARGET_HANDS_DAY, cash_reserve=400)
+    for _ in range(optimal_hires):
+        if len(market) >= 10:
+            break
+        market.append(["HIRE"])
 
-        for crop, n in _seed_demand(gs, tasks).items():
-            if len(market) >= 10:
-                break
-            if n > 0 and farm.money >= CROPS[crop]["seed_cost"] * n:
-                market.append(["BUY_SEED", crop, n])
-        market = market[:10]
+    for crop, n in _seed_demand(gs, tasks).items():
+        if len(market) >= 10:
+            break
+        if n > 0 and farm.money >= CROPS[crop]["seed_cost"] * n:
+            market.append(["BUY_SEED", crop, n])
+    market = market[:10]
 
-        return safe_action(
-            raw_farmer=farmer_action,
-            raw_hands=hands_actions,
-            raw_market=market,
-            observed_hand_count=farm.hand_count,
-            seeds=seeds,
-        )
-    except Exception:
-        try:
-            n = len(obs.get("farms", [{}])[obs.get("player", 0)].get("hands", []))
-        except Exception:
-            n = 0
-        return {"farmer": ["PASS"], "hands": [["PASS"]] * n, "market": []}
+    return safe_action(
+        raw_farmer=farmer_action,
+        raw_hands=hands_actions,
+        raw_market=market,
+        observed_hand_count=farm.hand_count,
+        seeds=seeds,
+    )
+
+
+agent = make_agent(core_agent, observed_hand_count_fn=hand_count_from_obs)
