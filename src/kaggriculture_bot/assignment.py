@@ -114,19 +114,27 @@ def _feasible(task: Task, gs: GameState, unit: UnitView, seed_ledger: dict[str, 
     return True
 
 
-def greedy_assign(gs: GameState, tasks: list[Task]) -> list[Assignment]:
-    """Exhaustive greedy assignment with exclusive spatial locks and seed budget."""
-    units = units_from_state(gs)
+def greedy_assign(gs: GameState, tasks: list[Task],
+                  allowed_unit_ids: set[int] | None = None) -> list[Assignment]:
+    """Exhaustive greedy assignment with exclusive spatial locks and seed budget.
+
+    Args:
+        allowed_unit_ids: if provided, only units with these indices are eligible
+            for task assignment. Unassigned allowed units get PASS. Units not in
+            this set are excluded entirely (no PASS entry either).
+    """
+    all_units = units_from_state(gs)
+    if allowed_unit_ids is not None:
+        units = [u for u in all_units if u.idx in allowed_unit_ids]
+    else:
+        units = all_units
     assigned_units: set[int] = set()
     claimed_conflict_keys: set[str] = set()
     claimed_task_ids: set[str] = set()
     out: list[Assignment] = []
 
-    # Local seed ledger initialized from available private seeds.
-    # Mutates as PLANT tasks get greedily claimed.
     seed_ledger = dict(gs.private.seeds)
 
-    # Sort tasks: highest-priority tier first, then expected_value desc.
     ordered = sorted(tasks, key=lambda t: (t.priority_tier, -t.expected_value))
     
     for task in ordered:
@@ -153,13 +161,11 @@ def greedy_assign(gs: GameState, tasks: list[Task]) -> list[Assignment]:
         if best is None:
             continue
 
-        # Claim the assignment
         claimed_task_ids.add(task.task_id)
         assigned_units.add(best.idx)
         if ck is not None:
             claimed_conflict_keys.add(ck)
             
-        # Deduct seed budget if planting
         if task.kind == TASK_PLANT:
             crop = task.crop or ""
             if crop in seed_ledger:
@@ -167,7 +173,6 @@ def greedy_assign(gs: GameState, tasks: list[Task]) -> list[Assignment]:
 
         out.append(Assignment(best.idx, task, _action_for(best, task, tgt)))
 
-    # Ensure unassigned units PASS
     for u in units:
         if u.idx not in assigned_units:
             out.append(Assignment(u.idx, None, ["PASS"]))

@@ -1,0 +1,10 @@
+{
+  "agent_version": "v062_livestock_os",
+  "source_path": "agents/v062_livestock_os/main.py",
+  "git_sha": "f692b358684eaf76884151c5a66f435dec235570",
+  "source_sha256": "a7517c85f8f94b9e6db4d3967b66e7e0365ece7feb43f24a8f0c7168d6826bea",
+  "artifact_sha256": "18edcf5e75709af4a42cd01c207acac8b8ed997441212ddd914377924c9bf952",
+  "artifact_path": "dist/v062/main.py",
+  "environment_name": "kaggriculture",
+  "environment_version": "1.32.3"
+}

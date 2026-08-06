@@ -54,115 +54,116 @@ def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
                        land_orders: list[list] | None = None,
                        cash_reserve: int = 400,
                        include_livestock: bool = False) -> list[list]:
-    """Compile optimal market orders, respecting the 10-order limit."""
+    """Compile optimal market orders, respecting the 10-order limit.
+
+    Order priority (cash-flow-aware):
+    1. SELL shed surplus (generate cash first)
+    2. Critical HIRE
+    3. Emergency feed purchase (BUY_PRODUCT WHEAT)
+    4. BUY_LAND (exact cost)
+    5. BUY_ANIMAL
+    6. BUY_SEED
+    7. Optional extra HIRE
+    """
     market_orders: list[list] = []
     step = gs.step
     farm = gs.self_farm
     shed = gs.private.shed
     money = farm.money
+    LAND_COSTS = [1000, 2000, 4000]
 
-    # 1. Terminal liquidation check (step >= 718)
-    # Sell ALL inventory unconditionally.
     if step >= LAST_STEP:
         for item, qty in sorted(shed.items()):
             if qty > 0:
                 market_orders.append(["SELL", item, qty])
         return market_orders[:MAX_MARKET_ORDERS]
 
-    # 1.5. Process land orders first (Stage v040)
-    if land_orders:
-        for order in land_orders:
-            market_orders.append(order)
-            money -= 1000.0  # NE cost is 1000
-
-    # 1.6. Livestock purchase and Wheat buffer management (Stage v041)
-    if include_livestock:
-        unlocked = farm.unlocked_quadrants
-        # Count existing and planned animals to support dynamic cows + sheep scaling
-        cows_on_board = 0
-        sheep_on_board = 0
-        for row in farm.tiles:
-            for tile in row:
-                if tile.kind == "PASTURE" and tile.animal_kind:
-                    if tile.animal_kind == "COW":
-                        cows_on_board += 1
-                    elif tile.animal_kind == "SHEEP":
-                        sheep_on_board += 1
-                        
-        cows_carrying = sum(inv.get("COW", 0) for inv in gs.private.inventories)
-        sheep_carrying = sum(inv.get("SHEEP", 0) for inv in gs.private.inventories)
-        
-        cows_in_shed = shed.get("COW", 0)
-        sheep_in_shed = shed.get("SHEEP", 0)
-        
-        total_cows = cows_on_board + cows_carrying + cows_in_shed
-        total_sheep = sheep_on_board + sheep_carrying + sheep_in_shed
-        
-        # We also count any pending BUY_ANIMAL orders we are submitting this turn
-        pending_cows = len([o for o in market_orders if o[0] == "BUY_ANIMAL" and o[1] == "COW"])
-        pending_sheep = len([o for o in market_orders if o[0] == "BUY_ANIMAL" and o[1] == "SHEEP"])
-        
-        # Scale livestock dynamically based on unlocked quadrants (Stage v060)
-        if "SW" in unlocked:
-            target_cows = 8
-            target_sheep = 6
-        elif "NE" in unlocked:
-            target_cows = 4
-            target_sheep = 3
-        else:
-            target_cows = 2
-            target_sheep = 2
-
-        if gs.day <= 18:
-            empty_pastures = sum(1 for row in farm.tiles for t in row
-                                 if t.kind == "PASTURE" and not t.animal_kind)
-            if (total_cows + pending_cows < target_cows and money >= cash_reserve + 500
-                    and empty_pastures > 0):
-                market_orders.append(["BUY_ANIMAL", "COW", 1])
-                money -= 400.0
-            if (total_sheep + pending_sheep < target_sheep and money >= cash_reserve + 600
-                    and empty_pastures > total_cows + pending_cows):
-                market_orders.append(["BUY_ANIMAL", "SHEEP", 1])
-                money -= 500.0
-            
-        animals_on_board = cows_on_board + sheep_on_board
-        if animals_on_board > 0:
-            wheat_buffer = min(10, 3 * animals_on_board)
-            current_wheat = shed.get("WHEAT", 0)
-            if current_wheat < wheat_buffer and money >= cash_reserve + 25:
-                buy_qty = int(wheat_buffer - current_wheat)
-                market_orders.append(["BUY_PRODUCT", "WHEAT", buy_qty])
-                money -= 25.0 * buy_qty
-
-    # 2. Compile HIRE orders via sequential marginal hiring using dynamic cash_reserve
-    optimal_hires = plan_hires(gs, tasks, max_hands=max_hands_day, cash_reserve=cash_reserve)
-    for _ in range(optimal_hires):
-        market_orders.append(["HIRE"])
-
-    # 3. Quantity-aware chunked selling (NEVER sell COW/SHEEP — they go on pastures)
     NEVER_SELL = {"COW", "SHEEP"}
+
+    # 1. SELL first — generate cash for subsequent purchases
+    sell_orders: list[list] = []
     for item in sorted(shed.keys()):
         if item in NEVER_SELL:
             continue
         qty = shed[item]
         if qty <= 0:
             continue
-            
         policy = CROP_POLICIES.get(item, {"hold_threshold": 1, "chunk_size": 100})
         curr_price = gs.market.prices.get(item, 1)
-        
         if curr_price < policy["hold_threshold"]:
             continue
-            
         chunk = min(qty, policy["chunk_size"])
         if chunk > 0:
-            market_orders.append(["SELL", item, chunk])
+            sell_orders.append(["SELL", item, chunk])
+            money += curr_price * chunk
+    market_orders.extend(sell_orders)
 
-    # 4. Restock seeds
+    # 2. Critical HIRE (at least 1 if we have none and it's early)
+    optimal_hires = plan_hires(gs, tasks, max_hands=max_hands_day, cash_reserve=cash_reserve)
+    critical_hires = min(optimal_hires, 2)
+    for _ in range(critical_hires):
+        market_orders.append(["HIRE"])
+
+    # 3. Emergency feed purchase
+    if include_livestock:
+        animals_on_board = sum(1 for row in farm.tiles for t in row if t.animal_kind)
+        if animals_on_board > 0:
+            total_wheat = shed.get("WHEAT", 0) + sum(
+                inv.get("WHEAT", 0) for inv in gs.private.inventories
+            )
+            wheat_buffer = min(10, 3 * animals_on_board)
+            if total_wheat < wheat_buffer and money >= cash_reserve + 25:
+                buy_qty = min(int(wheat_buffer - total_wheat), 4)
+                if buy_qty > 0:
+                    market_orders.append(["BUY_PRODUCT", "WHEAT", buy_qty])
+                    money -= 25.0 * buy_qty
+
+    # 4. BUY_LAND with exact cost
+    if land_orders:
+        n_unlocked = len(farm.unlocked_quadrants) - 1
+        for order in land_orders:
+            if n_unlocked < len(LAND_COSTS):
+                cost = LAND_COSTS[n_unlocked]
+                if money - cost >= cash_reserve:
+                    market_orders.append(order)
+                    money -= cost
+                    n_unlocked += 1
+
+    # 5. BUY_ANIMAL (capped at 2C2S for v062)
+    if include_livestock:
+        cows_on_board = sum(1 for row in farm.tiles for t in row if t.animal_kind == "COW")
+        sheep_on_board = sum(1 for row in farm.tiles for t in row if t.animal_kind == "SHEEP")
+        cows_carrying = sum(inv.get("COW", 0) for inv in gs.private.inventories)
+        sheep_carrying = sum(inv.get("SHEEP", 0) for inv in gs.private.inventories)
+        cows_in_shed = shed.get("COW", 0)
+        sheep_in_shed = shed.get("SHEEP", 0)
+
+        target_cows, target_sheep = 2, 2
+
+        if 4 <= gs.day <= 18 and farm.hand_count >= 3:
+            empty_pastures = sum(1 for row in farm.tiles for t in row
+                                 if t.kind == "PASTURE" and not t.animal_kind)
+            total_cows = cows_on_board + cows_carrying + cows_in_shed
+            total_sheep = sheep_on_board + sheep_carrying + sheep_in_shed
+
+            if (total_cows < target_cows and money >= cash_reserve + 400
+                    and empty_pastures > 0):
+                market_orders.append(["BUY_ANIMAL", "COW", 1])
+                money -= 400.0
+            if (total_sheep < target_sheep and money >= cash_reserve + 500
+                    and empty_pastures > total_cows):
+                market_orders.append(["BUY_ANIMAL", "SHEEP", 1])
+                money -= 500.0
+
+    # 6. BUY_SEED
     for crop, n in _seed_demand(gs, tasks, crop_plan).items():
         if n > 0 and money >= CROPS[crop]["seed_cost"] * n:
             market_orders.append(["BUY_SEED", crop, n])
-            # approximate remaining money
             money -= CROPS[crop]["seed_cost"] * n
+
+    # 7. Optional extra HIRE
+    extra_hires = optimal_hires - critical_hires
+    for _ in range(extra_hires):
+        market_orders.append(["HIRE"])
 
     return market_orders[:MAX_MARKET_ORDERS]
