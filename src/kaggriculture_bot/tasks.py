@@ -231,12 +231,18 @@ def _generate_livestock_tasks(gs: GameState, tasks: list[Task], last_step_today:
     for x, y in PASTURE_TILES:
         tile = farm.tile(x, y)
         
-        # A) Build PASTURE if empty
+        if tile.is_weed:
+            tasks.append(Task(
+                task_id=f"dig_pasture:{x},{y}", kind=TASK_DIG, target=(x, y),
+                priority_tier=TIER_DECAY, deadline_step=last_step_today,
+                expected_value=500.0,
+            ))
+            continue
         if tile.empty:
             tasks.append(Task(
                 task_id=f"build_pasture:{x},{y}", kind=TASK_BUILD_PASTURE, target=(x, y),
-                priority_tier=TIER_ROUTINE, deadline_step=last_step_today,
-                expected_value=100.0,
+                priority_tier=TIER_DECAY, deadline_step=last_step_today,
+                expected_value=500.0,
             ))
             continue
             
@@ -258,14 +264,14 @@ def _generate_livestock_tasks(gs: GameState, tasks: list[Task], last_step_today:
             # Else if we have bought animals waiting in shed, generate a PICKUP task!
             elif shed.get("COW", 0) > 0:
                 tasks.append(Task(
-                    task_id=f"pickup_cow:{x},{y}", kind=TASK_PICKUP, target=None, # picked up from nearest shed tile
-                    priority_tier=TIER_LOGISTICS, deadline_step=last_step_today,
+                    task_id=f"pickup_cow:{x},{y}", kind=TASK_PICKUP, target=None,
+                    priority_tier=TIER_HARVEST_HIGH, deadline_step=last_step_today,
                     expected_value=400.0, required_item="COW",
                 ))
             elif shed.get("SHEEP", 0) > 0:
                 tasks.append(Task(
                     task_id=f"pickup_sheep:{x},{y}", kind=TASK_PICKUP, target=None,
-                    priority_tier=TIER_LOGISTICS, deadline_step=last_step_today,
+                    priority_tier=TIER_HARVEST_HIGH, deadline_step=last_step_today,
                     expected_value=500.0, required_item="SHEEP",
                 ))
             continue

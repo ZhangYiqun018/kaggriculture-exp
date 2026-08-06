@@ -22,6 +22,7 @@ CROP_POLICIES = {
     "WHEAT":      {"hold_threshold": 12,  "chunk_size": 5},
     "TOMATO":     {"hold_threshold": 35,  "chunk_size": 2},
     "STRAWBERRY": {"hold_threshold": 70,  "chunk_size": 2},
+    "FERTILIZER": {"hold_threshold": 999, "chunk_size": 1},
 }
 
 
@@ -103,8 +104,8 @@ def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
         
         # Scale livestock dynamically based on unlocked quadrants (Stage v060)
         if "SW" in unlocked:
-            target_cows = 6
-            target_sheep = 4
+            target_cows = 8
+            target_sheep = 6
         elif "NE" in unlocked:
             target_cows = 4
             target_sheep = 3
@@ -112,25 +113,25 @@ def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
             target_cows = 2
             target_sheep = 2
 
-        # Support dynamic cows + sheep scaling
-        # Limit purchases to day >= 11 and day <= 18 to prevent early capital starvation
-        if 11 <= gs.day <= 18:
-            if total_cows + pending_cows < target_cows and money >= cash_reserve + 600:
+        if 4 <= gs.day <= 18:
+            empty_pastures = sum(1 for row in farm.tiles for t in row
+                                 if t.kind == "PASTURE" and not t.animal_kind)
+            if (total_cows + pending_cows < target_cows and money >= cash_reserve + 500
+                    and empty_pastures > 0):
                 market_orders.append(["BUY_ANIMAL", "COW", 1])
                 money -= 400.0
-            if total_sheep + pending_sheep < target_sheep and money >= cash_reserve + 800:
+            if (total_sheep + pending_sheep < target_sheep and money >= cash_reserve + 600
+                    and empty_pastures > total_cows + pending_cows):
                 market_orders.append(["BUY_ANIMAL", "SHEEP", 1])
                 money -= 500.0
             
-        # Maintain WHEAT feed buffer
-        total_animals = total_cows + total_sheep
-        if total_animals > 0:
-            wheat_buffer = max(10, 5 * total_animals)
+        animals_on_board = cows_on_board + sheep_on_board
+        if animals_on_board > 0:
+            wheat_buffer = min(10, 3 * animals_on_board)
             current_wheat = shed.get("WHEAT", 0)
             if current_wheat < wheat_buffer and money >= cash_reserve + 25:
                 buy_qty = int(wheat_buffer - current_wheat)
                 market_orders.append(["BUY_PRODUCT", "WHEAT", buy_qty])
-                # approximate cost of WHEAT product: base is 25
                 money -= 25.0 * buy_qty
 
     # 2. Compile HIRE orders via sequential marginal hiring using dynamic cash_reserve
@@ -138,8 +139,11 @@ def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
     for _ in range(optimal_hires):
         market_orders.append(["HIRE"])
 
-    # 3. Quantity-aware chunked selling
+    # 3. Quantity-aware chunked selling (NEVER sell COW/SHEEP — they go on pastures)
+    NEVER_SELL = {"COW", "SHEEP"}
     for item in sorted(shed.keys()):
+        if item in NEVER_SELL:
+            continue
         qty = shed[item]
         if qty <= 0:
             continue
@@ -147,11 +151,9 @@ def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
         policy = CROP_POLICIES.get(item, {"hold_threshold": 1, "chunk_size": 100})
         curr_price = gs.market.prices.get(item, 1)
         
-        # Hold threshold check: keep supply if price is too low
         if curr_price < policy["hold_threshold"]:
             continue
             
-        # Sell in small controlled chunks to avoid self-crashing the price
         chunk = min(qty, policy["chunk_size"])
         if chunk > 0:
             market_orders.append(["SELL", item, chunk])
