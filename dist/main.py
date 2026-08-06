@@ -276,13 +276,13 @@ class TileInfo:
             fert_avail = False
             
             animal_raw = g(raw, "animal")
-            if isinstance(animal_raw, dict):
-                animal_kind = g(animal_raw, "kind")
-                animal_yield = int(g(animal_raw, "yield_units", 0))
-                animal_unfed = int(g(animal_raw, "consecutive_unfed", 0))
-                animal_cared_today = bool(g(animal_raw, "cared_today", False))
-                animal_fed_today = bool(g(animal_raw, "fed_today", False))
-                fert_avail = bool(g(animal_raw, "fertilizer_available", False))
+            if animal_raw is not None:
+                animal_kind = animal_raw if isinstance(animal_raw, str) else g(animal_raw, "kind")
+                animal_yield = int(g(raw, "yield_units", 0))
+                animal_unfed = int(g(raw, "consecutive_unfed", 0))
+                animal_cared_today = bool(g(raw, "cared_today", False))
+                animal_fed_today = bool(g(raw, "fed_today", False))
+                fert_avail = bool(g(raw, "fertilizer_available", False))
                 
             return cls(
                 x, y, kind,
@@ -662,6 +662,8 @@ def get_crop_plan(gs: GameState, empty_tiles: list[tuple[int, int]], crops_pool:
 
 
 
+PASTURE_TILES = [(3, 4), (4, 3), (3, 3), (2, 4)]
+
 
 @dataclass
 class DailyPlan:
@@ -672,58 +674,48 @@ class DailyPlan:
     cash_reserve: int
 
 
-def compute_daily_plan(gs: GameState, include_strawberry: bool = True, include_land: bool = True) -> DailyPlan:
+def compute_daily_plan(gs: GameState, include_strawberry: bool = True, include_land: bool = True,
+                       include_livestock: bool = False) -> DailyPlan:
     day = gs.day
     money = gs.self_farm.money
     unlocked = gs.self_farm.unlocked_quadrants
 
-    # Define layout profiles
     nearest_16 = [
         (3, 4), (4, 3), (2, 4), (3, 3), (4, 2), (1, 4), (2, 3), (3, 2),
         (4, 1), (0, 4), (1, 3), (2, 2), (3, 1), (4, 0), (0, 3), (1, 2)
     ]
     all_nw = [(x, y) for y in range(5) for x in range(5) if (x, y) != (4, 4)]
 
-    # 1. Choose active tiles for NW
-    # Start from nearest_16, activate all 25 NW tiles when workload allows (day >= 4 and money >= 1200)
     if day >= 4 and money >= 1200:
         active_tiles = list(all_nw)
     else:
         active_tiles = list(nearest_16)
 
-    # If NE is unlocked, we add all 25 plantable tiles in NE quadrant (excluding shed NE 5,4)
     if "NE" in unlocked:
         ne_tiles = [(x, y) for y in range(5) for x in range(5, 10) if (x, y) != (5, 4)]
         active_tiles = active_tiles + ne_tiles
 
-    # If SW is unlocked, we add all 25 plantable tiles in SW quadrant (excluding shed SW 4,5)
     if "SW" in unlocked:
         sw_tiles = [(x, y) for y in range(5, 10) for x in range(5) if (x, y) != (4, 5)]
         active_tiles = active_tiles + sw_tiles
 
-    # 2. Buy land conditionally (to unlock NE first, then SW)
-    # Stagger land purchases to day >= 11 (after first Melon harvests) to prevent early capital starvation
+    if "SE" in unlocked:
+        se_tiles = [(x, y) for y in range(5, 10) for x in range(5, 10) if (x, y) != (5, 5)]
+        active_tiles = active_tiles + se_tiles
+
     land_orders = []
     cash_reserve = 400
-    
+
     if include_land:
         if "NE" not in unlocked:
-            # NE cost is $1000. Require day >= 11 and at least $2500 (leaving $1500 capital)
             if 11 <= day <= 20 and money >= 2500:
                 land_orders.append(["BUY_LAND"])
                 cash_reserve = 600
         elif "SW" not in unlocked:
-            # SW cost is $2000. Require day >= 13 and at least $4000 (leaving $2000 capital)
             if 13 <= day <= 20 and money >= 4000:
                 land_orders.append(["BUY_LAND"])
                 cash_reserve = 800
 
-    # 3. Dynamic hand scaling
-    # Scale hands dynamically up to 13 based on the number of active tiles:
-    # - 16 tiles: 6 hands
-    # - 25 tiles (NW): 8 hands
-    # - 50 tiles (NW+NE): 11 hands
-    # - 75 tiles (NW+NE+SW): 13 hands (max)
     n_tiles = len(active_tiles)
     if n_tiles <= 16:
         target_hands = 6
@@ -737,6 +729,9 @@ def compute_daily_plan(gs: GameState, include_strawberry: bool = True, include_l
     # 4. Generate CropPlan
     farm = gs.self_farm
     empty_tiles = [tile for tile in active_tiles if farm.tile(tile[0], tile[1]).empty]
+
+    if include_livestock:
+        empty_tiles = [t for t in empty_tiles if t not in PASTURE_TILES]
 
     # Full competitive crops pool (WHEAT, CARROT, MELON, TOMATO, STRAWBERRY)
     crops_pool = ["WHEAT", "CARROT", "MELON"]
@@ -971,12 +966,18 @@ def _generate_livestock_tasks(gs: GameState, tasks: list[Task], last_step_today:
     for x, y in PASTURE_TILES:
         tile = farm.tile(x, y)
         
-        # A) Build PASTURE if empty
+        if tile.is_weed:
+            tasks.append(Task(
+                task_id=f"dig_pasture:{x},{y}", kind=TASK_DIG, target=(x, y),
+                priority_tier=TIER_DECAY, deadline_step=last_step_today,
+                expected_value=500.0,
+            ))
+            continue
         if tile.empty:
             tasks.append(Task(
                 task_id=f"build_pasture:{x},{y}", kind=TASK_BUILD_PASTURE, target=(x, y),
-                priority_tier=TIER_ROUTINE, deadline_step=last_step_today,
-                expected_value=100.0,
+                priority_tier=TIER_DECAY, deadline_step=last_step_today,
+                expected_value=500.0,
             ))
             continue
             
@@ -998,14 +999,14 @@ def _generate_livestock_tasks(gs: GameState, tasks: list[Task], last_step_today:
             # Else if we have bought animals waiting in shed, generate a PICKUP task!
             elif shed.get("COW", 0) > 0:
                 tasks.append(Task(
-                    task_id=f"pickup_cow:{x},{y}", kind=TASK_PICKUP, target=None, # picked up from nearest shed tile
-                    priority_tier=TIER_LOGISTICS, deadline_step=last_step_today,
+                    task_id=f"pickup_cow:{x},{y}", kind=TASK_PICKUP, target=None,
+                    priority_tier=TIER_HARVEST_HIGH, deadline_step=last_step_today,
                     expected_value=400.0, required_item="COW",
                 ))
             elif shed.get("SHEEP", 0) > 0:
                 tasks.append(Task(
                     task_id=f"pickup_sheep:{x},{y}", kind=TASK_PICKUP, target=None,
-                    priority_tier=TIER_LOGISTICS, deadline_step=last_step_today,
+                    priority_tier=TIER_HARVEST_HIGH, deadline_step=last_step_today,
                     expected_value=500.0, required_item="SHEEP",
                 ))
             continue
@@ -1471,6 +1472,7 @@ CROP_POLICIES = {
     "WHEAT":      {"hold_threshold": 12,  "chunk_size": 5},
     "TOMATO":     {"hold_threshold": 35,  "chunk_size": 2},
     "STRAWBERRY": {"hold_threshold": 70,  "chunk_size": 2},
+    "FERTILIZER": {"hold_threshold": 999, "chunk_size": 1},
 }
 
 
@@ -1552,8 +1554,8 @@ def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
         
         # Scale livestock dynamically based on unlocked quadrants (Stage v060)
         if "SW" in unlocked:
-            target_cows = 6
-            target_sheep = 4
+            target_cows = 8
+            target_sheep = 6
         elif "NE" in unlocked:
             target_cows = 4
             target_sheep = 3
@@ -1561,25 +1563,25 @@ def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
             target_cows = 2
             target_sheep = 2
 
-        # Support dynamic cows + sheep scaling
-        # Limit purchases to day >= 11 and day <= 18 to prevent early capital starvation
-        if 11 <= gs.day <= 18:
-            if total_cows + pending_cows < target_cows and money >= cash_reserve + 600:
+        if gs.day <= 18:
+            empty_pastures = sum(1 for row in farm.tiles for t in row
+                                 if t.kind == "PASTURE" and not t.animal_kind)
+            if (total_cows + pending_cows < target_cows and money >= cash_reserve + 500
+                    and empty_pastures > 0):
                 market_orders.append(["BUY_ANIMAL", "COW", 1])
                 money -= 400.0
-            if total_sheep + pending_sheep < target_sheep and money >= cash_reserve + 800:
+            if (total_sheep + pending_sheep < target_sheep and money >= cash_reserve + 600
+                    and empty_pastures > total_cows + pending_cows):
                 market_orders.append(["BUY_ANIMAL", "SHEEP", 1])
                 money -= 500.0
             
-        # Maintain WHEAT feed buffer
-        total_animals = total_cows + total_sheep
-        if total_animals > 0:
-            wheat_buffer = max(10, 5 * total_animals)
+        animals_on_board = cows_on_board + sheep_on_board
+        if animals_on_board > 0:
+            wheat_buffer = min(10, 3 * animals_on_board)
             current_wheat = shed.get("WHEAT", 0)
             if current_wheat < wheat_buffer and money >= cash_reserve + 25:
                 buy_qty = int(wheat_buffer - current_wheat)
                 market_orders.append(["BUY_PRODUCT", "WHEAT", buy_qty])
-                # approximate cost of WHEAT product: base is 25
                 money -= 25.0 * buy_qty
 
     # 2. Compile HIRE orders via sequential marginal hiring using dynamic cash_reserve
@@ -1587,8 +1589,11 @@ def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
     for _ in range(optimal_hires):
         market_orders.append(["HIRE"])
 
-    # 3. Quantity-aware chunked selling
+    # 3. Quantity-aware chunked selling (NEVER sell COW/SHEEP — they go on pastures)
+    NEVER_SELL = {"COW", "SHEEP"}
     for item in sorted(shed.keys()):
+        if item in NEVER_SELL:
+            continue
         qty = shed[item]
         if qty <= 0:
             continue
@@ -1596,11 +1601,9 @@ def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
         policy = CROP_POLICIES.get(item, {"hold_threshold": 1, "chunk_size": 100})
         curr_price = gs.market.prices.get(item, 1)
         
-        # Hold threshold check: keep supply if price is too low
         if curr_price < policy["hold_threshold"]:
             continue
             
-        # Sell in small controlled chunks to avoid self-crashing the price
         chunk = min(qty, policy["chunk_size"])
         if chunk > 0:
             market_orders.append(["SELL", item, chunk])
@@ -1664,10 +1667,16 @@ def hand_count_from_obs(obs) -> int:
 
 
 
-# Master Ablation Flags (patchable by evaluation suite)
 INCLUDE_STRAWBERRY = True
 INCLUDE_LAND = True
-INCLUDE_LIVESTOCK = False
+INCLUDE_LIVESTOCK = True
+
+SHED_TILES = [
+    (BOARD_SIZE // 2 - 1, BOARD_SIZE // 2 - 1),  # (4,4)
+    (BOARD_SIZE // 2, BOARD_SIZE // 2 - 1),      # (5,4)
+    (BOARD_SIZE // 2 - 1, BOARD_SIZE // 2),      # (4,5)
+    (BOARD_SIZE // 2, BOARD_SIZE // 2),           # (5,5)
+]
 
 _EP = {}
 
@@ -1675,6 +1684,180 @@ _EP = {}
 def _reset_episode_state():
     global _EP
     _EP = {}
+
+
+def _move_toward(pos, target):
+    fx, fy = pos
+    tx, ty = target
+    if fx < tx:
+        return ["EAST"]
+    if fx > tx:
+        return ["WEST"]
+    if fy < ty:
+        return ["SOUTH"]
+    if fy > ty:
+        return ["NORTH"]
+    return ["PASS"]
+
+
+def _nearest_shed_tile(pos):
+    best, best_d = SHED_TILES[0], 999
+    for st in SHED_TILES:
+        d = abs(pos[0] - st[0]) + abs(pos[1] - st[1])
+        if d < best_d:
+            best, best_d = st, d
+    return best
+
+
+def _find_empty_pasture(farm):
+    for px, py in PASTURE_TILES:
+        t = farm.tile(px, py)
+        if t.kind == "PASTURE" and not t.animal_kind:
+            return (px, py)
+    return None
+
+
+def _find_unbuilt_pasture_tile(farm):
+    for px, py in PASTURE_TILES:
+        t = farm.tile(px, py)
+        if t.empty or t.is_weed:
+            return (px, py), t.is_weed
+    return None, False
+
+
+def _find_hungry_animal(farm):
+    """Find the nearest animal that needs feeding."""
+    best, best_d = None, 999
+    for px, py in PASTURE_TILES:
+        t = farm.tile(px, py)
+        if t.animal_kind and not t.animal_fed_today:
+            d = 0  # distance computed by caller
+            return (px, py)
+    return None
+
+
+def _find_collectable_fertilizer(farm):
+    for px, py in PASTURE_TILES:
+        t = farm.tile(px, py)
+        if t.animal_kind and t.fertilizer_available:
+            return (px, py)
+    return None
+
+
+def _farmer_livestock_action(gs):
+    """If farmer should be doing livestock work, return the action. Else None."""
+    farm = gs.self_farm
+    shed = gs.private.shed
+    farmer_pos = farm.farmer
+    farmer_inv = gs.private.inventories[0] if gs.private.inventories else {}
+
+    carrying_cow = farmer_inv.get("COW", 0) > 0
+    carrying_sheep = farmer_inv.get("SHEEP", 0) > 0
+    carrying_wheat = farmer_inv.get("WHEAT", 0) > 0
+    carrying_fert = farmer_inv.get("FERTILIZER", 0) > 0
+
+    # 0. Carrying wheat → move to hungry animal → FEED
+    if carrying_wheat:
+        hungry = _find_hungry_animal(farm)
+        if hungry is not None:
+            if farmer_pos == hungry:
+                return ["FEED"]
+            return _move_toward(farmer_pos, hungry)
+
+    # 0.5. Carrying fertilizer → move to nearest strawberry → FERTILIZE
+    if carrying_fert:
+        for y in range(len(farm.tiles)):
+            for x in range(len(farm.tiles[y])):
+                t = farm.tiles[y][x]
+                if t.kind == "PLANT" and t.crop == "STRAWBERRY" and t.fertilized_until_day < gs.day:
+                    target = (x, y)
+                    if farmer_pos == target:
+                        return ["FERTILIZE"]
+                    return _move_toward(farmer_pos, target)
+
+    # 1. Carrying animal → move to nearest empty pasture → PLACE
+    if carrying_cow or carrying_sheep:
+        animal = "COW" if carrying_cow else "SHEEP"
+        target = _find_empty_pasture(farm)
+        if target is None:
+            return ["PASS"]
+        if farmer_pos == target:
+            return ["PLACE", animal]
+        return _move_toward(farmer_pos, target)
+
+    # 1.5. Hungry animals + wheat in shed → go to shed → PICKUP WHEAT
+    hungry = _find_hungry_animal(farm)
+    if hungry is not None and shed.get("WHEAT", 0) > 0 and not carrying_wheat:
+        nearest_shed = _nearest_shed_tile(farmer_pos)
+        if farmer_pos == nearest_shed:
+            return ["PICKUP", "WHEAT", 1]
+        return _move_toward(farmer_pos, nearest_shed)
+
+    # 1.7. Collectable fertilizer → move to animal → COLLECT_FERTILIZER
+    fert_tile = _find_collectable_fertilizer(farm)
+    if fert_tile is not None:
+        if farmer_pos == fert_tile:
+            return ["COLLECT_FERTILIZER"]
+        return _move_toward(farmer_pos, fert_tile)
+
+    # 2. Animals in shed + empty pastures → go to shed → PICKUP
+    shed_cow = shed.get("COW", 0)
+    shed_sheep = shed.get("SHEEP", 0)
+    empty_pasture = _find_empty_pasture(farm)
+
+    if (shed_cow > 0 or shed_sheep > 0) and empty_pasture is not None:
+        animal = "COW" if shed_cow > 0 else "SHEEP"
+        nearest_shed = _nearest_shed_tile(farmer_pos)
+        if farmer_pos == nearest_shed:
+            return ["PICKUP", animal, 1]
+        return _move_toward(farmer_pos, nearest_shed)
+
+    # 3. Unbuilt pasture tiles → move there → BUILD_PASTURE (or DIG if weed)
+    unbuilt, is_weed = _find_unbuilt_pasture_tile(farm)
+    if unbuilt is not None:
+        if farmer_pos == unbuilt:
+            if is_weed:
+                return ["DIG"]
+            return ["BUILD_PASTURE"]
+        return _move_toward(farmer_pos, unbuilt)
+
+    return None
+
+
+def _livestock_setup_needed(gs):
+    """True if farmer should be dedicated to livestock work."""
+    farm = gs.self_farm
+    shed = gs.private.shed
+    farmer_inv = gs.private.inventories[0] if gs.private.inventories else {}
+
+    if farmer_inv.get("COW", 0) > 0 or farmer_inv.get("SHEEP", 0) > 0:
+        return True
+    if farmer_inv.get("WHEAT", 0) > 0:
+        hungry = _find_hungry_animal(farm)
+        if hungry is not None:
+            return True
+    if farmer_inv.get("FERTILIZER", 0) > 0:
+        return True
+
+    # Hungry animals need feeding
+    hungry = _find_hungry_animal(farm)
+    if hungry is not None and shed.get("WHEAT", 0) > 0:
+        return True
+
+    # Collectable fertilizer
+    if _find_collectable_fertilizer(farm) is not None:
+        return True
+
+    # Animals in shed + empty pastures
+    if shed.get("COW", 0) > 0 or shed.get("SHEEP", 0) > 0:
+        if _find_empty_pasture(farm) is not None:
+            return True
+
+    # Unbuilt pasture tiles
+    unbuilt, _ = _find_unbuilt_pasture_tile(farm)
+    if unbuilt is not None and (shed.get("COW", 0) > 0 or shed.get("SHEEP", 0) > 0):
+        return True
+    return False
 
 
 def core_agent(obs, config=None):
@@ -1686,21 +1869,26 @@ def core_agent(obs, config=None):
     private = gs.private
     seeds = private.seeds
 
-    # 1. Compute DailyPlan incorporating land, strawberry and livestock
-    dp = compute_daily_plan(gs, include_strawberry=INCLUDE_STRAWBERRY, include_land=INCLUDE_LAND)
+    dp = compute_daily_plan(gs, include_strawberry=INCLUDE_STRAWBERRY, include_land=INCLUDE_LAND,
+                            include_livestock=INCLUDE_LIVESTOCK)
 
-    # 2. Generate tasks (watering, digging, planting, harvesting, livestock lifecycle, fertilizing)
     tasks = generate_tasks(
         gs, dp.active_tiles,
         crop_plan=dp.crop_plan,
         include_livestock=INCLUDE_LIVESTOCK
     )
-    assignments = greedy_assign(gs, tasks)
 
-    farmer_action = assignments[0].action if assignments else ["PASS"]
-    hands_actions = [a.action for a in assignments[1:]]
+    if INCLUDE_LIVESTOCK and _livestock_setup_needed(gs):
+        farmer_action = _farmer_livestock_action(gs)
+        if farmer_action is None:
+            farmer_action = ["PASS"]
+        assignments = greedy_assign(gs, tasks)
+        hands_actions = [a.action for a in assignments if a.unit_idx != 0]
+    else:
+        assignments = greedy_assign(gs, tasks)
+        farmer_action = assignments[0].action if assignments else ["PASS"]
+        hands_actions = [a.action for a in assignments[1:]]
 
-    # 3. Market orders incorporating sequential hiring, wheat feed buffers, and animal purchases
     market = plan_market_orders(
         gs, tasks,
         max_hands_day=dp.target_hands,

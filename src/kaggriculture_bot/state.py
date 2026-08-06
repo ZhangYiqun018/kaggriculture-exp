@@ -87,13 +87,13 @@ class TileInfo:
             fert_avail = False
             
             animal_raw = g(raw, "animal")
-            if isinstance(animal_raw, dict):
-                animal_kind = g(animal_raw, "kind")
-                animal_yield = int(g(animal_raw, "yield_units", 0))
-                animal_unfed = int(g(animal_raw, "consecutive_unfed", 0))
-                animal_cared_today = bool(g(animal_raw, "cared_today", False))
-                animal_fed_today = bool(g(animal_raw, "fed_today", False))
-                fert_avail = bool(g(animal_raw, "fertilizer_available", False))
+            if animal_raw is not None:
+                animal_kind = animal_raw if isinstance(animal_raw, str) else g(animal_raw, "kind")
+                animal_yield = int(g(raw, "yield_units", 0))
+                animal_unfed = int(g(raw, "consecutive_unfed", 0))
+                animal_cared_today = bool(g(raw, "cared_today", False))
+                animal_fed_today = bool(g(raw, "fed_today", False))
+                fert_avail = bool(g(raw, "fertilizer_available", False))
                 
             return cls(
                 x, y, kind,

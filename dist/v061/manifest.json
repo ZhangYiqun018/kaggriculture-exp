@@ -1,9 +1,9 @@
 {
   "agent_version": "v061_scale_unlock",
   "source_path": "agents/v061_scale_unlock/main.py",
-  "git_sha": "8115625303eed114b37e0138b79bb8eb80b17695",
-  "source_sha256": "ad006cd07db8f6c568ce670451140924c8e60e7d289d7b4b80e44970791ecbe4",
-  "artifact_sha256": "64955adcc3a31a57622e949ee49214da0795dfe97462a0989c329c0bbc1a0b0e",
+  "git_sha": "9de88f50211126f900aefc95f0ceb6125404e3b8",
+  "source_sha256": "353d574e7b6c39551b286a741e129b27f2d1279b42b186f243481eb214f99f85",
+  "artifact_sha256": "689d0c1cb21fe41f7661422bf7cf6115958cce9ce5246e847ce60b78666be55c",
   "artifact_path": "dist/v061/main.py",
   "environment_name": "kaggriculture",
   "environment_version": "1.32.3"

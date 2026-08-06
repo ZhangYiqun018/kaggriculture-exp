@@ -113,7 +113,7 @@ def plan_market_orders(gs: GameState, tasks: list[Task], max_hands_day: int = 6,
             target_cows = 2
             target_sheep = 2
 
-        if 4 <= gs.day <= 18:
+        if gs.day <= 18:
             empty_pastures = sum(1 for row in farm.tiles for t in row
                                  if t.kind == "PASTURE" and not t.animal_kind)
             if (total_cows + pending_cows < target_cows and money >= cash_reserve + 500
